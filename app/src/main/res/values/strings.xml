@@ -1,0 +1,24 @@
+<resources>
+    <string name="app_name">Swan Gallery</string>
+
+    <!-- Sign-in screen -->
+    <string name="sign_in_title">Sign in to Swan</string>
+    <string name="sign_in_text">Enter your details to create a Swan session.</string>
+    <string name="welcome_back">Welcome back</string>
+    <string name="welcome_back_text">You are signed in. Continue, or sign in with another email.</string>
+    <string name="signed_in_as">%1$s · valid until %2$s</string>
+    <string name="email">Email</string>
+    <string name="name">Name</string>
+    <string name="continue_button">Continue</string>
+    <string name="use_different_email">Use a different email</string>
+    <string name="signing_in">Signing in…</string>
+    <string name="opening_gallery">Opening the gallery…</string>
+    <string name="try_again">Try again</string>
+    <string name="sign_in_footer">Signs in to %1$s. The session is kept on this phone until it expires.</string>
+    <string name="error_email">Enter a valid email address.</string>
+    <string name="error_name">Enter your name.</string>
+    <string name="error_sign_in">Sign-in failed.</string>
+    <string name="error_page">The gallery didn\'t open. Check your connection and try again.</string>
+    <string name="error_session">Your session has ended. Sign in again.</string>
+    <string name="error_expired">Your session has expired. Sign in again.</string>
+</resources>
