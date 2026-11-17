@@ -13,7 +13,8 @@ step 7 re-tuning: sign-in, the page, the camera flow, the upload and the build;
 the photo permission, the library window, thumbnails, originals and captures
 are served; the per-photo scan store makes a second scan a fraction of the
 first; sandbox builds post the scan report to Swan's ingest with
-`platform: "android"`. Faces are matched against
+`platform: "android"` (iOS sends `platform: "ios"`) and the User-Agent
+`photoApp-android/<build>`, which the ingest lists as `client`. Faces are matched against
 the selfie with the same SFace model and 0.60 cut-off as iOS (ML Kit finds the
 faces, MediaPipe reads each one; ML Kit's model comes from Play services). Bodies are read with the pose landmarker and the same person-mask readings as
 iOS, so a front, three-quarter or side arrives with its body score, tier and
@@ -190,7 +191,14 @@ download once.
 
 Debug builds can scan one folder only (`GallerySettings.evalFolder`, a
 `relative_path` prefix such as `DCIM/SwanEval`) so that both phones judge the
-same pushed files; release builds always scan the whole window.
+same pushed files; release builds always scan the whole window. Eval mode
+(`GallerySettings.evalMode`, debug builds only) scores each scan against a
+hand-labelled folder, `DCIM/Swan-Eval`, the way the Xcode copy scores against
+its Swan-Eval album: the matcher's AUC, precision at the top of the grid,
+recall, coverage, each gate's right and wrong calls, the grid as shown and the
+labelled photos it missed, to logcat and `files/scan-reports/eval-*.txt`. The
+first run's reference is pinned so runs compare; `evalReplaceReference`
+renews it.
 
 - `adb logcat -s swan` shows the host's own lines and every `WEB_LOG`.
 - `adb logcat -s chromium` shows the page's console. `chrome://inspect` on a

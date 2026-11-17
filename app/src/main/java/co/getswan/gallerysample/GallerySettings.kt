@@ -375,4 +375,17 @@ object GallerySettings {
     /** Debug builds with `evalFolder`: log every photo's clothing labels at scan start, match or not, so a label
      *  line (sari, gown, suit) can be read on stock photos that match no reference. */
     val debugLogLabels = BuildConfig.DEBUG
+
+    // MARK: eval mode (Swan-Eval) — see DevTools.kt; the eval half of the Xcode copy's DevTools.swift
+
+    /** Measures matching against a hand-labelled folder and logs the result after each scan. Debug builds
+     *  only; keep it off in any build a brand sees. The grid is unaffected. */
+    val evalMode = BuildConfig.DEBUG && false
+    /** The folder that holds every photo that should reach the grid: the shopper alone, head to toe, or a
+     *  selfie of them. Read as the answer key (the iPhone's "Swan-Eval" album). */
+    const val evalAlbumFolder = "DCIM/Swan-Eval"
+    /** How much of the grid "precision at the top" looks at. */
+    const val evalTopN = 20
+    /** Replace the saved eval reference with this run's. Set true for one run, then back. */
+    const val evalReplaceReference = false
 }

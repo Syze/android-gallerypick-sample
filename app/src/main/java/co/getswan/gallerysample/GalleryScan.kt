@@ -55,8 +55,11 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
 
             val reference = chooseReference(frames) ?: run { complete(run, JSONArray(), limited, error = "no-face-in-selfie"); return@execute }
             rejection(reference)?.let { complete(run, JSONArray(), limited, error = it); return@execute }
-            val referenceVector = recognizer.embedding(reference.bitmap, reference.face, FaceVision.landmarks(reference.bitmap, reference.face))
+            val freshReference = recognizer.embedding(reference.bitmap, reference.face, FaceVision.landmarks(reference.bitmap, reference.face))
                 ?: run { complete(run, JSONArray(), limited, error = "no-face-in-selfie"); return@execute }
+            // Eval mode pins the first run's reference, so runs are comparable (DevTools.kt).
+            val referenceVector = DevTools.pinnedReference(context, account, freshReference)
+            val evalLabels = DevTools.evalLabels(context)
 
             // What earlier scans learned about this account's photos.
             val store = ScanStore.open(context, account)
@@ -294,7 +297,7 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
                 }
                 // (the small copy, when kept, is freed with the render below)
                 store?.saveIfDue()
-                if (report != null) trail[asset.id] = JSONObject().put("id", asset.id).put("file", asset.file).put("taken", taken.format(Date(asset.takenAt)))
+                if (report != null || evalLabels != null) trail[asset.id] = JSONObject().put("id", asset.id).put("file", asset.file).put("taken", taken.format(Date(asset.takenAt)))
                     .put("outcome", outcome.substringBefore(" [").substringBefore(" head {").substringBefore(" photo {").take(160)).put("facePx", facePx.toInt()).put("ms", System.currentTimeMillis() - t0)
                 if (GallerySettings.scanLogEnabled) Log.d(TAG, "  #${i + 1}/${assets.size} ${asset.id}: $outcome (${System.currentTimeMillis() - t0}ms)")
                 val now = System.currentTimeMillis()
@@ -394,6 +397,10 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
             for ((k, v) in ends) summary.put(k, v)
             summary.put("stageMs", JSONObject(stageMs as Map<*, *>))
             report?.endOfScan(droppedWhy, checks, JSONArray(trail.values.sortedByDescending { it.optString("taken") }))
+            if (evalLabels != null) {
+                val text = DevTools.evalReport(evalLabels, trail.values, ordered.filter { trail[it]?.optString("outcome") != "withdrawn" })
+                Log.i(TAG, text); DevTools.save(context, text)
+            }
             complete(run, JSONArray(ordered), limited, summary = summary, dropped = dropped)
         }
     }

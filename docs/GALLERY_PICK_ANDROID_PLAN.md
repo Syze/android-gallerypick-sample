@@ -295,7 +295,9 @@ and eval.
   four short bodies were retried and none rescued (knee-ups); the 75 small faces
   were decided from the store written before the retry existed, so Android's
   store rules version moved to 14, one ahead of iOS's 13, to re-examine them.
-- Slice left: `DevTools.kt`, the eval mode of the Xcode copy (Swan-Eval album,
+- Done 17 Nov: `DevTools.kt`, the eval mode of the Xcode copy (a `DCIM/Swan-Eval` folder
+  as the answer key, the trail as the per-photo record, the same block printed and saved,
+  the reference pinned per account). Was: `DevTools.kt`, the eval mode of the Xcode copy (Swan-Eval album,
   per-photo CSV), needed for step 7 and ported then.
 - Cost pass (13 Nov), full runs on the 521-photo library, same 16 matches each
   time: baseline 197 s (decode ~125 ms and detection ~115 ms per photo for all
@@ -365,6 +367,15 @@ and eval.
   same `scoreInputs` JSON the iOS scan report has. The 633 body photos and the
   selfies already on file give the iOS side, so comparing is a script. It
   decides the face source and the label map, and grows into `DevTools.kt`.
+
+Eval mode's first run on Android (17 Nov, answer key = the 18 of the 51 shared
+photos iOS showed, whole library scanned): recall 1.00 (18 of 18 reached the
+grid, no gate lost one), precision at the top 0.80 (the four "wrong" in the
+top 20 are the small photo, the head-down selfie, and two of the user's own
+photos outside the 51 that the key cannot know about), coverage fillable,
+selfie AUC 0.965. The full-body AUC (0.47) is an artefact of that key: the
+"wrong" bodies are the user's WhatsApp photos. A real key labels the whole
+library, as the iPhone album does.
 
 ## 7. Re-tuning: the real work
 

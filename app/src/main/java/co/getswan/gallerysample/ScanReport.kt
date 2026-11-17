@@ -94,8 +94,10 @@ class ScanReport(private val url: String?, private val key: String?, private val
         val json = report.toString().toByteArray()
         val packed = ByteArrayOutputStream().also { GZIPOutputStream(it).use { g -> g.write(json) } }.toByteArray()
         for (attempt in 1..attempts) {
+            // The product token names the platform and build, as iOS's "photoApp/<build>" does: the ingest lists it as `client`.
             val request = Request.Builder().url(url).post(packed.toRequestBody("application/json".toMediaType()))
-                .header("Content-Encoding", "gzip").also { b -> key?.let { b.header("x-api-key", it) } }.build()
+                .header("Content-Encoding", "gzip").header("User-Agent", "photoApp-android/${BuildConfig.VERSION_CODE}")
+                .also { b -> key?.let { b.header("x-api-key", it) } }.build()
             val result = runCatching { client.newCall(request).execute() }
             val response = result.getOrNull()
             if (response != null && response.isSuccessful) {
