@@ -19,12 +19,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.graphics.Color
-import androidx.activity.SystemBarStyle
-import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import org.json.JSONObject
@@ -67,16 +62,9 @@ class GalleryActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Edge to edge at the bottom, as on iOS: the page pads above the navigation bar itself
-        // (safe-area inset), so padding it here too would add the space twice. The status bar
-        // keeps its own band with dark icons, since the page's header is light.
-        enableEdgeToEdge(statusBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT))
+        // The page sits inside the system bars, like the iOS sample under its safe areas; the page's
+        // own header and footer spacing is all that remains, so nothing is padded here.
         setContentView(R.layout.activity_gallery)
-        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(bars.left, bars.top, bars.right, 0)
-            insets
-        }
         loading = findViewById(R.id.loading)
         webView = findViewById(R.id.webView)
         session = SwanSession.load(this)

@@ -1,0 +1,6 @@
+<resources>
+    <!-- Android 15+ lays apps targeting SDK 35+ out edge to edge; the gallery page sits inside the bars instead. -->
+    <style name="Theme.Androidgallerysample" parent="Base.Theme.Androidgallerysample">
+        <item name="android:windowOptOutEdgeToEdgeEnforcement">true</item>
+    </style>
+</resources>
