@@ -20,6 +20,17 @@ object GallerySettings {
     const val originalByteCap = 10 * 1024 * 1024
     /** How many photos from the flow's camera are held in memory. */
     const val captureLimit = 12
+    /** The scan's gates run on a camera shot too, as on iOS: a capture cannot pass what a library photo would not. */
+    const val captureGatesEnabled = true
+    /** Averages the usable selfie frames' embeddings into one reference, as iOS does: one frame's quirk (an expression,
+     *  a small turn, a shadow) is cancelled. Off, the sharpest frame alone is the reference. */
+    const val blendReferenceFrames = true
+    /** A frame joins the blend when its face detail is at least this share of the sharpest frame's. Android has no
+     *  capture-quality model (iOS: Vision quality 0.3 and up), so the floor is relative; the log shows each frame's detail. */
+    const val blendDetailShare = 0.4f
+    /** A camera shot must be the shopper in the selfie, at the scan's cut; the page shows `captureNotShopperWhy`. */
+    const val captureIdentityCheck = true
+    const val captureNotShopperWhy = "not the person in the selfie"
 
     // MARK: faces (iOS values; see GallerySettings.swift and FaceVision.swift)
 
@@ -265,8 +276,11 @@ object GallerySettings {
      *  `MuseScore.eyeContrast` is logged next (sclera-to-iris contrast inside the eye box). */
     val sunglassesEyeDarkLine: Float? = null
     const val garmentCapsEnabled = true
-    val looseGarmentLabels = setOf("gown", "sari", "kimono", "wedding_dress", "cloak", "poncho", "bathrobe", "costume")
+    val looseGarmentLabels = setOf("gown", "sari", "kimono", "wedding_dress", "cloak", "poncho", "bathrobe", "costume", "jacket")
     const val looseGarmentLine = 0.3f
+    /** ML Kit reads `jacket` 0.29–0.46 on T-shirts and 0.62+ on real outer layers, so it gets its own line
+     *  (iOS: 0.3 on Vision). Untested against the labelled set; tune from scan reports. */
+    val looseGarmentLineByLabel = mapOf("jacket" to 0.75f)
     /** Garment caps: labels, confidence line, then the cap on torso, legs and arms. */
     data class GarmentCap(val labels: Set<String>, val line: Float, val torso: Float, val legs: Float, val arms: Float)
     /** Android lines for suit and jacket sit higher than iOS's (0.4 / 0.22 and 0.6): ML Kit names Blazer 0.29–0.46 and
@@ -274,12 +288,19 @@ object GallerySettings {
      *  0.22–0.24, only the half cap, so the strong cap's line sits above ML Kit's range and the half cap does the work. */
     val garmentCaps = listOf(
         GarmentCap(setOf("suit", "tuxedo"), 0.9f, 0.2f, 1f, 0.2f),
+        // The torso-crop read: a blazer over a shirt sits at 0.90–0.93, T-shirts and sides at 0.39 and under (18 Nov).
+        GarmentCap(setOf("suit@torso", "tuxedo@torso"), 0.6f, 0.2f, 1f, 0.2f),
         GarmentCap(setOf("lab_coat"), 0.3f, 0.2f, 1f, 0.2f),
         GarmentCap(setOf("suit", "tuxedo"), 0.5f, 0.5f, 1f, 0.5f),
         GarmentCap(setOf("gown", "sari", "kimono", "wedding_dress"), 0.3f, 1f, 0.2f, 1f),
         GarmentCap(setOf("hoodie"), 0.5f, 0.5f, 1f, 1f),
         GarmentCap(setOf("jacket"), 0.75f, 0.5f, 1f, 0.5f),
     )
+    /** On, suit and tuxedo are read on the torso crop as well, as `suit@torso`: ML Kit gives a blazer over a shirt 0.33–0.37 on the
+     *  whole photo (under the T-shirts' 0.29–0.46) but 0.90–0.93 on the crop, where T-shirts and sides read 0.39 or less (18 Nov).
+     *  iOS needs no crop: Vision names the same blazer `suit 0.69–0.71` and the T-shirts nothing. */
+    const val garmentReadOnTorso = true
+    val torsoGarmentLabels = setOf("suit", "tuxedo")
     const val fullLengthOutfitMultiplier = true
     /** "Busy top" line on the torso crop's gradient. Android 0.13 beside iOS 0.11: the crop hangs off ML Kit's larger
      *  box and reads about 1.2× iOS on the same photos (eight shared bodies, 16 Nov); 0.13 fires on the same ones. */
@@ -289,7 +310,7 @@ object GallerySettings {
     fun garmentCaps(garments: List<Pair<String, Float>>): BodyScore.Caps? {
         if (!garmentCapsEnabled && !looseGarmentGateEnabled) return null
         val caps = BodyScore.Caps()
-        if (looseGarmentGateEnabled) garments.filter { looseGarmentLabels.contains(it.first) && it.second >= looseGarmentLine }.maxByOrNull { it.second }
+        if (looseGarmentGateEnabled) garments.filter { looseGarmentLabels.contains(it.first) && it.second >= (looseGarmentLineByLabel[it.first] ?: looseGarmentLine) }.maxByOrNull { it.second }
             ?.let { caps.loose = "${it.first} ${"%.2f".format(it.second)}" }
         if (garmentCapsEnabled) for (rule in garmentCaps) {
             val hit = garments.filter { rule.labels.contains(it.first) && it.second >= rule.line }.maxByOrNull { it.second } ?: continue
@@ -388,4 +409,7 @@ object GallerySettings {
     const val evalTopN = 20
     /** Replace the saved eval reference with this run's. Set true for one run, then back. */
     const val evalReplaceReference = false
+    /** Debug builds: two more garment reads per matched body in the trail (ML Kit on the torso crop, and MediaPipe's
+     *  image classifier on the crop and the whole photo). Logged only, no scoring; for setting a blazer line. */
+    val debugGarmentReads = BuildConfig.DEBUG
 }

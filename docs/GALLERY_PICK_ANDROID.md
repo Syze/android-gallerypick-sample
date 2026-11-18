@@ -14,7 +14,8 @@ the photo permission, the library window, thumbnails, originals and captures
 are served; the per-photo scan store makes a second scan a fraction of the
 first; sandbox builds post the scan report to Swan's ingest with
 `platform: "android"` (iOS sends `platform: "ios"`) and the User-Agent
-`photoApp-android/<build>`, which the ingest lists as `client`. Faces are matched against
+`photoApp-android/<build>`, which the ingest lists as `client`, and the signed-in
+email as `account`, which the ingest lists scans by (`GET /v1/scans?account=<email>`). Faces are matched against
 the selfie with the same SFace model and 0.60 cut-off as iOS (ML Kit finds the
 faces, MediaPipe reads each one; ML Kit's model comes from Play services). Bodies are read with the pose landmarker and the same person-mask readings as
 iOS, so a front, three-quarter or side arrives with its body score, tier and
@@ -134,10 +135,10 @@ The full table is in GALLERY_PICK.md. On Android without the scan, the minimum:
 
 | Message | Answer |
 |---|---|
-| `GALLERY_SCAN_START` | Ask `READ_MEDIA_IMAGES` (13+) or `READ_EXTERNAL_STORAGE`, plus `READ_MEDIA_VISUAL_USER_SELECTED` on 14+. Refused: `onGalleryScanComplete { assetIds: [], denied: true }`. Granted: list `MediaStore.Images` in the `monthsBack` window, newest first, the Screenshots folder left out; under 14's selected photos no date window and `limited: true`. The sharpest selfie frame is the reference (`error: "no-face-in-selfie"`, `"several-faces-in-selfie"` or `"selfie-not-frontal"` when it cannot be). Each photo is read at 1536 px; faces found by the landmarker, bystanders under a quarter of the widest face ignored, a group or a face under 120 px left out, the rest embedded with SFace; a distance under 0.60 is streamed as `onGalleryMatchFound { assetId, type, isFullBody, distance, takenAt, done, total }`, with `onGalleryScanProgress` every 250 ms and a `summary` tally at the end |
+| `GALLERY_SCAN_START` | Ask `READ_MEDIA_IMAGES` (13+) or `READ_EXTERNAL_STORAGE`, plus `READ_MEDIA_VISUAL_USER_SELECTED` on 14+. Refused: `onGalleryScanComplete { assetIds: [], denied: true }`. Granted: list `MediaStore.Images` in the `monthsBack` window, newest first, the Screenshots folder left out; under 14's selected photos no date window and `limited: true`. The sharpest selfie frame is the reference, blended with the other frames at 40% of its detail as iOS blends by capture quality (`blendReferenceFrames`; `error: "no-face-in-selfie"`, `"several-faces-in-selfie"` or `"selfie-not-frontal"` when it cannot be). Each photo is read at 1536 px; faces found by the landmarker, bystanders under a quarter of the widest face ignored, a group or a face under 120 px left out, the rest embedded with SFace; a distance under 0.60 is streamed as `onGalleryMatchFound { assetId, type, isFullBody, distance, takenAt, done, total }`, with `onGalleryScanProgress` every 250 ms and a `summary` tally at the end |
 | `GALLERY_THUMBNAILS` | `onGalleryThumbnails { thumbs: [{ id, dataURI }] }`, a 256 px JPEG decoded with `ImageDecoder` (EXIF orientation applied; the provider's `loadThumbnail` returned some HEIC photos unrotated) |
 | `GALLERY_FULL_IMAGE` | `onGalleryFullImage { id, dataURI, original: true, hasVideo: false }`: the original file's bytes and MIME type, never re-encoded, up to 10 MB, else `{ id, error: "tooLarge" \| "unreadable" }`. There is no Live Photo pairing on Android |
-| `GALLERY_CAPTURE_PHOTO` | Hold the JPEG bytes as sent (12 at most), answer `onGalleryPhotoAnalysis { captured: true, type: <shot>, isFullBody }` |
+| `GALLERY_CAPTURE_PHOTO` | Hold the JPEG bytes as sent (12 at most), then judge the shot as the scan would, as iOS does: face, pose, type from the body, the scan's gates (`captureGatesEnabled`), and the face must be the shopper in the selfie (`captureIdentityCheck`). Answer `onGalleryPhotoAnalysis { captured: true, type, isFullBody }`, or `error: "unusable"` with `scoreFilter` naming the gate |
 | `GALLERY_ANALYSE_PHOTO` | `onGalleryPhotoAnalysis` from what the scan recorded for the id, else `error: "unavailable"` |
 | `GALLERY_PICK_MORE` | Android 14+: ask the photo permissions again, which reopens the selected-photos sheet |
 | `OPEN_SETTINGS` | `startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))` |
@@ -188,6 +189,16 @@ model files to Play Feature Delivery so the install stays small and the models
 download once.
 
 ## Debugging
+
+Every matched front, side or three-quarter carries ML Kit's garment labels in the
+report's trail (`garments`). Debug builds add two more reads under
+`GallerySettings.debugGarmentReads`, logged only: ML Kit on the torso crop and
+MediaPipe's image classifier (EfficientNet-Lite0, ImageNet names such as `suit`,
+`trench coat`, `jersey`) on the crop and the whole photo, as `garmentReads`.
+They found the blazer line: suit and tuxedo are now read on the torso crop as
+well (`garmentReadOnTorso`, logged as `suit@torso`), where a blazer over a
+shirt reads 0.90 and over and a T-shirt under 0.4, so the suit cap holds a
+blazer to Tier B as Vision's whole-photo suit label does on iOS.
 
 Debug builds can scan one folder only (`GallerySettings.evalFolder`, a
 `relative_path` prefix such as `DCIM/SwanEval`) so that both phones judge the

@@ -631,6 +631,24 @@ on the tester's coat. So a coat on Android gets the blazer caps and is not
 dropped; iOS drops it only when Vision loses a knee under it. The cue left is
 garment length from the mask, which needs tester photos at phone resolution.
 
+**Blazer, same file on both phones (18 Nov).** A blazer over a shirt reads
+`suit 0.69–0.71` on Vision, and the T-shirt fronts in the same library read no
+suit or jacket at all, so iOS caps it to Tier B (0.58–0.63). ML Kit gives the
+blazer `jacket 0.63–0.65, suit 0.33–0.37`, under the T-shirts' `jacket
+0.60–0.71, suit 0.29–0.46`, so no whole-photo line separates them: the blazer
+scores 0.98 Tier A on Android and takes a front tile by the session rule.
+The full dark suits from the stock set still read 0.62–0.86, so the suit cap
+holds for those. Labels are now written to the trail (`garments`), and debug
+builds log two more reads per body (`debugGarmentReads`: ML Kit on the torso
+crop, and MediaPipe's EfficientNet-Lite0 classifier on the crop and the whole
+photo). That scan settled it: on the torso crop ML Kit reads the four blazers
+`suit 0.90–0.93` and every T-shirt front and side `0.39` or under, while the
+classifier agrees with a thinner margin (`suit 0.27–0.63` against `jersey
+0.70–0.99`). So suit and tuxedo are now read on the torso crop as well
+(`garmentReadOnTorso`, named `suit@torso`, strong cap at 0.6), the blazers
+fall to Tier B as on iOS, and the classifier stays debug-only. The jacket label
+is no use even on the crop: two sides read `jacket 0.78–0.82` in a T-shirt.
+
 ### Android values beside the iOS ones, and what testers should check
 
 Every Android-only line lives in `GallerySettings.kt` under its own name with
@@ -648,6 +666,7 @@ between the two readers, measured on shared photos. The evidence is uneven:
 | `looseLegsMergedShare` | off | one coat at 1.0, but every side view and legs-together front too | off |
 | Saree by label | same list and line as iOS | four stock sarees: gown 0.51–0.82, sari 0.23–0.93; all drop | solid for the label; the pose and mask gates untested on a matching face |
 | Long coat | none | four stock coats and the tester's: jacket 0.81–0.93, suit 0.60–0.90, no coat label | open: needs tester photos for a length cue |
+| `garmentReadOnTorso` (suit on the torso crop, line 0.6) | on, beside iOS's whole-photo suit line 0.4 | four blazers 0.90–0.93 on the crop; T-shirt fronts and sides 0.39 and under; whole photo had the blazers under the T-shirts | solid on one library; check a blazer or coat on a tester's phone drops to Tier B |
 | `documentMaxFaceShare` | 0.3 | two banner selfies at 0.44–0.49; the ID card not yet re-read | thin |
 | Head-down with `assumedPhoneTiltDegrees` 0 | iOS reads the true tilt | within 3° of iOS on 10 of 11 selfies, 8.5° off on one | thin |
 | `minFaceOriginalPixels` | 120, same as iOS | 156 was tried to drop one small photo (Vision 103, ML Kit 134) and also dropped two iOS keeps (Vision 126, ML Kit 137 / 150): no line separates them | accepted difference |

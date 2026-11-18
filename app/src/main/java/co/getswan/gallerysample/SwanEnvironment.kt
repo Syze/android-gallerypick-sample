@@ -8,7 +8,7 @@ object SwanEnvironment {
 
     /** The Swan page. Must be https: the camera needs a secure context. Sandbox loads the dev CDN,
      *  whose versions are numbered separately from production's. */
-    val pageUrl: String = if (sandbox) "https://dhua7f26rck7x.cloudfront.net/v1.3.18/index.html"
+    val pageUrl: String = if (sandbox) "https://dhua7f26rck7x.cloudfront.net/v1.3.21/index.html"
                           else "https://swan-mobile-web-component.swan.so/v1.3.18/index.html"
 
     /** Where the sample mints session tokens. Must be the same environment as the page. */

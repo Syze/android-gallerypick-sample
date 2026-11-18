@@ -27,6 +27,8 @@ class ScanReport(private val url: String?, private val key: String?, private val
     private var droppedWhy: Map<String, String> = emptyMap()
     private var checks = JSONObject()
     private var trail = JSONArray()
+    /** The signed-in account the scan ran for; the ingest lists scans by it. */
+    var account: String? = null
     private val main = Handler(Looper.getMainLooper())
     /** Called on the main thread with the stored report's id and photo count. */
     var onStored: ((String, Int) -> Unit)? = null
@@ -54,6 +56,7 @@ class ScanReport(private val url: String?, private val key: String?, private val
             .put("device", "${Build.MANUFACTURER} ${Build.MODEL} Android ${Build.VERSION.RELEASE}")
             .put("model", Build.MODEL)
             .put("platform", "android")
+            .putOpt("account", account)
             .put("page", page)
             .put("shown", photos.size)
             .put("dropped", JSONArray(dropped))

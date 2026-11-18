@@ -2,6 +2,7 @@ package co.getswan.gallerysample
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.graphics.RectF
 import android.util.Log
@@ -14,6 +15,7 @@ import java.util.TimeZone
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
+import kotlin.math.sqrt
 
 /** The photo scan. Mirrors `GalleryScan.swift` and the face half of `LibraryScan.swift` /
  *  `FaceVision.swift`: the reference selfie, every photo in the window through the face gates and
@@ -28,11 +30,13 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
     private class Ahead(val small: Bitmap?, val faces: List<FaceVision.Face>, val larger: Bitmap? = null)
     private val generation = AtomicInteger(0)
     private val recognizer: FaceRecognizer? by lazy { FaceRecognizer.load(context) }
+    /** The last scan's reference face, for the identity check on camera shots. */
+    @Volatile private var lastReference: FloatArray? = null
     /** Time spent per reader this scan, in ms, for the summary's `stageMs`. */
     private val stageMs = LinkedHashMap<String, Long>()
     private inline fun <T> timed(stage: String, work: () -> T): T { val t = System.nanoTime(); try { return work() } finally { stageMs[stage] = (stageMs[stage] ?: 0L) + (System.nanoTime() - t) / 1_000_000 } }
 
-    init { FaceVision.init(context); FaceCover.init(context); BodyPose.init(context); BodyObjects.init(context); BodyScore.init(context); Hands.init(context) }
+    init { FaceVision.init(context); FaceCover.init(context); BodyPose.init(context); BodyObjects.init(context); BodyScore.init(context); Hands.init(context); GarmentClassifier.init(context) }
 
     fun reset() { generation.incrementAndGet() }
 
@@ -57,8 +61,11 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
             rejection(reference)?.let { complete(run, JSONArray(), limited, error = it); return@execute }
             val freshReference = recognizer.embedding(reference.bitmap, reference.face, FaceVision.landmarks(reference.bitmap, reference.face))
                 ?: run { complete(run, JSONArray(), limited, error = "no-face-in-selfie"); return@execute }
+            // The other usable frames join the reference (`blendReferenceFrames`), as on iOS.
+            val blendedReference = blendReference(recognizer, reference, freshReference)
             // Eval mode pins the first run's reference, so runs are comparable (DevTools.kt).
-            val referenceVector = DevTools.pinnedReference(context, account, freshReference)
+            val referenceVector = DevTools.pinnedReference(context, account, blendedReference)
+            lastReference = referenceVector
             val evalLabels = DevTools.evalLabels(context)
 
             // What earlier scans learned about this account's photos.
@@ -104,6 +111,9 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
                 val t0 = System.currentTimeMillis()
                 var outcome: String
                 var facePx = 0f
+                // Garment labels of a matched body, kept whole in the trail (the outcome line is cut at 160).
+                var garmentNote: String? = null
+                var garmentReads: JSONObject? = null
                 // A photo the store already knows is counted without a load.
                 val stored = store?.record(asset)
                 val decided: String? = stored?.let { r -> when (r.verdict) {
@@ -224,7 +234,18 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
                                     val document = if (S.documentGateEnabled) timed("text") { DocumentRead.read(render, faces.first().box) } else null
                                     val headLabels = timed("labels") { render.crop(headBox(faces.first().box))?.let { Labels.read(it) } ?: emptyMap() }
                                     val wholeLabels = timed("labels") { Labels.read(render) }
-                                    val garments = wholeLabels.filter { (S.garmentCaps.any { r -> r.labels.contains(it.key) } || S.looseGarmentLabels.contains(it.key)) && it.value > 0.1f }.map { it.key to it.value }
+                                    // Suit and tuxedo are also read on the torso crop (`garmentReadOnTorso`), named `suit@torso` for their own cap line.
+                                    val torsoCrop = if (!selfie && (S.garmentReadOnTorso || S.debugGarmentReads)) Labels.torsoCrop(render, faces.first().box) else null
+                                    val torsoLabels = torsoCrop?.let { timed("labels") { Labels.read(it) } } ?: emptyMap()
+                                    val garments = wholeLabels.filter { (S.garmentCaps.any { r -> r.labels.contains(it.key) } || S.looseGarmentLabels.contains(it.key)) && it.value > 0.1f }.map { it.key to it.value } +
+                                        (if (S.garmentReadOnTorso) torsoLabels.filter { S.torsoGarmentLabels.contains(it.key) && it.value > 0.1f }.map { "${it.key}@torso" to it.value } else emptyList())
+                                    if (!selfie) garmentNote = garments.joinToString(" ") { "${it.first} ${"%.2f".format(it.second)}" }.ifEmpty { "none" }
+                                    if (torsoCrop != null && S.debugGarmentReads) {
+                                        // Two extra garment reads, logged only: all of ML Kit on the torso crop, and the classifier.
+                                        fun fmt(l: List<Pair<String, Float>>) = l.joinToString(" ") { "${it.first} ${"%.2f".format(it.second)}" }.ifEmpty { "none" }
+                                        garmentReads = JSONObject().put("mlkitTorso", fmt(torsoLabels.filter { it.value > 0.1f }.map { it.key to it.value }.sortedByDescending { it.second }.take(8)))
+                                            .put("classifierTorso", fmt(GarmentClassifier.read(torsoCrop))).put("classifierWhole", fmt(GarmentClassifier.read(render)))
+                                    }
                                     val dressy = wholeLabels.filter { MuseScore.DRESSY_LABELS.contains(it.key) }.values.maxOrNull() ?: 0f
                                     val busy = Labels.torsoCrop(render, faces.first().box)?.let { Labels.busyness(it) } ?: 0f
                                     val outfit = MuseScore.Outfit(dressy, busy)
@@ -298,7 +319,7 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
                 // (the small copy, when kept, is freed with the render below)
                 store?.saveIfDue()
                 if (report != null || evalLabels != null) trail[asset.id] = JSONObject().put("id", asset.id).put("file", asset.file).put("taken", taken.format(Date(asset.takenAt)))
-                    .put("outcome", outcome.substringBefore(" [").substringBefore(" head {").substringBefore(" photo {").take(160)).put("facePx", facePx.toInt()).put("ms", System.currentTimeMillis() - t0)
+                    .put("outcome", outcome.substringBefore(" [").substringBefore(" head {").substringBefore(" photo {").take(160)).put("facePx", facePx.toInt()).put("ms", System.currentTimeMillis() - t0).putOpt("garments", garmentNote).putOpt("garmentReads", garmentReads)
                 if (GallerySettings.scanLogEnabled) Log.d(TAG, "  #${i + 1}/${assets.size} ${asset.id}: $outcome (${System.currentTimeMillis() - t0}ms)")
                 val now = System.currentTimeMillis()
                 if (now - lastProgress >= S.progressIntervalMs || i == assets.lastIndex) {
@@ -414,10 +435,10 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
     }
 
     /** The v2 selfie score for one matched selfie: expression and cover on the head crop, camera data from the original. */
-    private fun selfieScore(bitmap: Bitmap, face: FaceVision.Face, points: List<android.graphics.PointF>, faceWidthPx: Float, eyesOriginal: Float?, originalScale: Float, asset: GalleryPhotos.Asset, document: DocumentRead?, labels: Map<String, Float>, outfit: MuseScore.Outfit, hands: Hands.Read?): MuseScore {
+    private fun selfieScore(bitmap: Bitmap, face: FaceVision.Face, points: List<android.graphics.PointF>, faceWidthPx: Float, eyesOriginal: Float?, originalScale: Float, asset: GalleryPhotos.Asset?, document: DocumentRead?, labels: Map<String, Float>, outfit: MuseScore.Outfit, hands: Hands.Read?): MuseScore {
         val expression = FaceVision.expression(bitmap, face)
-        val camera = Original.camera(context, asset.uri)
-        val gates = MuseScore.SelfieGates(eyesOriginal, originalScale, maxOf(asset.width, asset.height).toFloat(), camera)
+        val camera = asset?.let { Original.camera(context, it.uri) }
+        val gates = MuseScore.SelfieGates(eyesOriginal, originalScale, (asset?.let { maxOf(it.width, it.height) } ?: maxOf(bitmap.width, bitmap.height)).toFloat(), camera)
         val coverReader: ((FaceExpression?) -> FaceCover?)? = if (GallerySettings.coverReadEnabled) { e ->
             val head = headBox(face.box)
             bitmap.crop(head)?.let { crop ->
@@ -436,23 +457,46 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
         return if (p == null) " [no head transform]" else " [pitch ${"%+.1f".format(p)} yaw ${"%.1f".format(y ?: 0.0)} roll ${"%.1f".format(ro ?: 0.0)} ratio ${r["faceRatio"] ?: "-"} dark ${r["eyeDark"] ?: "-"} contrast ${r["eyeContrast"] ?: "-"}]"
     }
 
-    private data class Reference(val bitmap: Bitmap, val face: FaceVision.Face, val note: String)
+    private data class Frame(val bitmap: Bitmap, val face: FaceVision.Face, val detail: Float)
+    /** The chosen frame, plus every frame with a face (the chosen one included) for the blend. */
+    private data class Reference(val bitmap: Bitmap, val face: FaceVision.Face, val note: String, val frames: List<Frame> = emptyList())
 
     /** The sharpest frame that has a face; the tapped frame (last) wins a tie, as on iOS. */
     private fun chooseReference(frames: List<String>): Reference? {
         var best: Reference? = null; var bestDetail = -1f
-        val notes = ArrayList<String>()
+        val notes = ArrayList<String>(); val found = ArrayList<Frame>()
         for ((i, uri) in frames.withIndex()) {
             val bytes = GalleryPhotos.bytesOfDataURI(uri) ?: continue
             val bitmap = runCatching { ImageDecoder.decodeBitmap(ImageDecoder.createSource(java.nio.ByteBuffer.wrap(bytes))) { d, _, _ -> d.allocator = ImageDecoder.ALLOCATOR_SOFTWARE } }.getOrNull() ?: continue
             val face = FaceVision.detect(bitmap, careful = true).firstOrNull()
             if (face == null) { notes.add("no face"); continue }
             val detail = laplacianVariance(bitmap, face.box.pixels(bitmap)) ?: 0f
-            notes.add("%.1f".format(detail))
+            notes.add("%.1f".format(detail)); found.add(Frame(bitmap, face, detail))
             if (detail >= bestDetail) { bestDetail = detail; best = Reference(bitmap, face, "") }
         }
         Log.i(TAG, "reference: ${frames.size} frame(s), detail ${notes.joinToString(" / ")}")
-        return best
+        return best?.copy(frames = found)
+    }
+
+    /** The sharpest frame's embedding averaged with the other frames at `blendDetailShare` of its detail, normalised; the
+     *  sharpest alone when nothing else qualifies. Logged like iOS: frames' spread and the blend's shift from the sharpest. */
+    private fun blendReference(recognizer: FaceRecognizer, reference: Reference, sharpest: FloatArray): FloatArray {
+        val S = GallerySettings
+        if (!S.blendReferenceFrames || reference.frames.size < 2) return sharpest
+        val bestDetail = reference.frames.maxOf { it.detail }
+        val sum = sharpest.copyOf(); var used = 1; var spread = 0f
+        for (f in reference.frames) {
+            if (f.bitmap === reference.bitmap || f.detail < bestDetail * S.blendDetailShare) continue
+            val e = recognizer.embedding(f.bitmap, f.face, FaceVision.landmarks(f.bitmap, f.face).ifEmpty { FaceVision.keyPoints(f.bitmap, f.face) }) ?: continue
+            spread = maxOf(spread, FaceRecognizer.distance(sharpest, e))
+            for (k in sum.indices) sum[k] += e[k]
+            used++
+        }
+        if (used < 2) { Log.i(TAG, "reference: sharpest frame alone (no other frame at ${S.blendDetailShare} of its detail)"); return sharpest }
+        val norm = sqrt(sum.sumOf { (it * it).toDouble() }).toFloat()
+        val blended = FloatArray(sum.size) { sum[it] / norm }
+        Log.i(TAG, "reference blended from $used of ${reference.frames.size} frame(s): frames up to %.3f apart, blend %.3f from the sharpest".format(spread, FaceRecognizer.distance(sharpest, blended)))
+        return blended
     }
 
     /** Why the selfie cannot be the reference, or null. Same rules as `selfieRejection`: other faces, head turned or tilted. */
@@ -493,17 +537,76 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
     /** `GALLERY_ANALYSE_PHOTO`: what the scan knows about the photo, else `unavailable`. */
     fun analyse(id: String) = sendToWeb(analysisMessage(id, GalleryPhotos.AnalysisStore.get(id), captured = false))
 
-    /** `GALLERY_CAPTURE_PHOTO`: hold the bytes as sent, answer from the shot the page asked for. */
+    /** `GALLERY_CAPTURE_PHOTO`: hold the bytes as sent, then judge the shot as the scan would (`analyse` in GalleryPhotos.swift). */
     fun storeCapture(id: String, dataURI: String, shot: String) {
         worker.execute {
             val bytes = GalleryPhotos.bytesOfDataURI(dataURI)
             if (id.isEmpty() || bytes == null) { sendToWeb(analysisError(id, "unreadable", captured = true)); return@execute }
             if (!GalleryPhotos.CaptureStore.store(id, bytes)) { sendToWeb(analysisError(id, "store-full", captured = true)); return@execute }
-            val type = if (shot == "selfie" || shot == "front" || shot == "side") shot else "unknown"
-            val analysis = GalleryPhotos.Analysis(type, type == "front" || type == "side")
+            val bitmap = decodeCapture(bytes) ?: run { sendToWeb(analysisError(id, "unreadable", captured = true)); return@execute }
+            val (analysis, gate) = try { analyseCapture(bitmap) } finally { bitmap.recycle() }
+            // Stored first, so the tap that follows takes the same path as a scanned photo.
             GalleryPhotos.AnalysisStore.store(id, analysis)
+            if (gate != null) {
+                Log.i(TAG, "capture $id (asked $shot) gated: $gate")
+                sendToWeb(analysisError(id, "unusable", captured = true).also { it.getJSONObject("payload").put("scoreFilter", gate) })
+                return@execute
+            }
+            Log.i(TAG, "capture $id (asked $shot) read as ${analysis.type}, head to toe ${analysis.isFullBody}")
             sendToWeb(analysisMessage(id, analysis, captured = true))
         }
+    }
+
+    /** The capture at the scan's working size: it is its own original, so the scale is 1. */
+    private fun decodeCapture(bytes: ByteArray): Bitmap? = runCatching {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= GallerySettings.loadPixels) sample *= 2
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.ARGB_8888 })
+    }.getOrNull()
+
+    /** The scan's face-to-body tie, type and gates on a camera shot: no camera data, so the selfie gates read it as a front camera.
+     *  Returns the analysis and the gate that refused it, if any. */
+    private fun analyseCapture(bitmap: Bitmap): Pair<GalleryPhotos.Analysis, String?> {
+        val S = GallerySettings
+        val face = FaceVision.detect(bitmap).firstOrNull()
+        val detected = BodyObjects.read(bitmap)
+        val body = BodyPose.check(bitmap, face?.box, BodyObjects.people(detected))
+        if (face == null) return GalleryPhotos.Analysis(BodyPose.photoType(0f, null, null, body).wire, body.isHeadToToe, body.lowerJoints, body.hasOthers) to null
+        val points = FaceVision.landmarks(bitmap, face).ifEmpty { if (S.mlKitLandmarkFallback) FaceVision.keyPoints(bitmap, face) else emptyList() }
+        val eyes = if (body.lowerJoints == 0) FaceVision.eyeSpacing(points, bitmap.width, bitmap.height) else null
+        val faceRatio = face.width * bitmap.width / minOf(bitmap.width, bitmap.height)
+        val kind = BodyPose.photoType(faceRatio, eyes, FaceVision.headYaw(bitmap, face), body)
+        val selfie = kind == BodyPose.PhotoType.SELFIE
+        val analysis = GalleryPhotos.Analysis(kind.wire, body.isHeadToToe, body.lowerJoints, body.hasOthers)
+        // The shot must be the shopper in the selfie, at the scan's cut.
+        if (S.captureIdentityCheck && points.isNotEmpty()) {
+            val reference = lastReference; val recognizer = recognizer
+            if (reference != null && recognizer != null) {
+                val d = recognizer.embedding(bitmap, face, points)?.let { FaceRecognizer.distance(reference, it) }
+                Log.i(TAG, "capture identity d=${d?.let { "%.3f".format(it) } ?: "none"} cut ${S.matchThreshold}")
+                if (d == null || d >= S.matchThreshold) return analysis to S.captureNotShopperWhy
+            }
+        }
+        if (!S.captureGatesEnabled || kind == BodyPose.PhotoType.UNKNOWN) return analysis to null
+        val document = if (S.documentGateEnabled) DocumentRead.read(bitmap, face.box) else null
+        val headLabels = bitmap.crop(headBox(face.box))?.let { Labels.read(it) } ?: emptyMap()
+        val wholeLabels = Labels.read(bitmap)
+        val torsoCrop = Labels.torsoCrop(bitmap, face.box)
+        val garments = wholeLabels.filter { (S.garmentCaps.any { r -> r.labels.contains(it.key) } || S.looseGarmentLabels.contains(it.key)) && it.value > 0.1f }.map { it.key to it.value } +
+            (if (!selfie && S.garmentReadOnTorso && torsoCrop != null) Labels.read(torsoCrop).filter { S.torsoGarmentLabels.contains(it.key) && it.value > 0.1f }.map { "${it.key}@torso" to it.value } else emptyList())
+        val dressy = wholeLabels.filter { MuseScore.DRESSY_LABELS.contains(it.key) }.values.maxOrNull() ?: 0f
+        val busy = torsoCrop?.let { Labels.busyness(it) } ?: 0f
+        val outfit = MuseScore.Outfit(dressy, busy)
+        val gate = if (selfie) {
+            selfieScore(bitmap, face, points, face.width * bitmap.width, eyes, 1f, null, document, headLabels, outfit, Hands.read(bitmap, face.box)).filter
+        } else if (S.fullLengthScoreV2) {
+            var bodyScore = BodyScore.compute(bitmap, body, face.box, 1.0, caps = S.garmentCaps(garments), objects = if (S.objectReadEnabled) BodyObjects.objects(detected) else emptyList())
+            if (bodyScore != null && S.fullLengthOutfitMultiplier && busy >= S.busyTorso) bodyScore = bodyScore.withOutfit(MuseScore.OUTFIT_MULTIPLIER, "busy top")
+            bodyScore?.filter
+        } else null
+        return analysis to (gate ?: if (document?.isDocument == true) "document" else null)
     }
 
     private fun analysisMessage(id: String, analysis: GalleryPhotos.Analysis?, captured: Boolean): JSONObject {

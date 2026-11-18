@@ -139,8 +139,8 @@ object GalleryPhotos {
         @Synchronized fun removeAll() = held.clear()
     }
 
-    /** What the page learned about one photo, kept so a tap answers at once. Until the face and
-     *  body work is ported the type comes from the capture's `shot` or the scan stub. */
+    /** What the page learned about one photo, kept so a tap answers at once: from the scan, or from
+     *  `GalleryScan.analyseCapture` for a camera shot. */
     data class Analysis(val type: String, val isFullBody: Boolean, val lowerJoints: Int = if (isFullBody) 4 else 0, val otherPeople: Boolean = false)
     object AnalysisStore {
         private val held = HashMap<String, Analysis>()

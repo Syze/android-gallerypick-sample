@@ -264,6 +264,7 @@ class GalleryActivity : AppCompatActivity() {
     // MARK: host -> page
 
     private fun sendToWeb(message: JSONObject) = runOnUiThread {
+        report?.account = session?.email
         report?.collect(message)
         webView.evaluateJavascript("window.postMessage($message, window.location.origin);", null)
     }

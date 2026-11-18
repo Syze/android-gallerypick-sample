@@ -28,7 +28,7 @@ class ScanStore private constructor(private val file: File, private val records:
         const val enabled = true
         /** Bump when a rule changes the stored verdicts, so old records are ignored and rebuilt.
          *  One ahead of iOS's 13: Android's larger-render retry landed after its stores were written. */
-        const val rulesVersion = 15
+        const val rulesVersion = 16
 
         private fun fileName(account: String): String {
             val digest = MessageDigest.getInstance("SHA-256").digest(account.lowercase().toByteArray())
