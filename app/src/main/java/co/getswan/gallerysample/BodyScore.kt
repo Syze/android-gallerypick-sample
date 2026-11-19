@@ -60,7 +60,7 @@ class BodyScore private constructor(
         private const val TAG = "swan"
         // Thresholds, as in BodyScore.swift.
         val torsoFit = 1.05 to 1.35; val thighFit = 0.45 to 0.70; val shinFit = 0.30 to 0.50; val armFit = 0.25 to 0.45
-        val outline = 0.14 to 0.04; val light = 0.10 to 0.03
+        val outline = 0.14 to 0.04; val light = 0.05 to 0.015 // light halved 19 Nov 2026 (was 0.10 to 0.03)
         const val skinBonus = 0.1
         const val sittingKneeDrop = 0.5; const val sittingThighTilt = 50.0; const val sittingKneeAngle = 120.0
         const val leanLight = 12.0; const val leanHeavy = 25.0; const val lyingTilt = 60.0
@@ -473,7 +473,7 @@ class BodyScore private constructor(
             val t = weights.zip(groups).fold(1f) { acc, (wt, g) -> acc * g.pow(wt.second) }
             val value = if (filter == null) t else 0f
             val parts = listOf("torso" to torso, "legs" to legs, "arms" to arms, "openness" to openness, "quality" to quality)
-            val noTier = filter != null || (GallerySettings.torsoUnreadNoTier && readings["torsoFit"] == null)
+            val noTier = filter != null || (GallerySettings.torsoUnreadNoTier && readings["torsoFit"] == null) || (GallerySettings.sittingNoTier && sitting)
             val tier = if (noTier) null else if (t >= GallerySettings.fullLengthTierALine) "A" else if (t >= GallerySettings.fullLengthUsableFloor) "B" else null
             return BodyScore(value, tier, parts, reasons, filter, readings, if (outfit.isEmpty()) null else outfit)
         }

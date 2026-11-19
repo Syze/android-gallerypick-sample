@@ -306,7 +306,7 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
                                             (document?.let { " [text ${it.lines} lines, ${it.nearFace} near the face, ${"%.1f".format(it.textArea * 100)}% of the frame, face ${"%.0f".format(it.faceShare * 100)}% wide]" } ?: "") +
                                             (if (selfie) "" else bodyNote + (if (bodyAgain != null) " rescued on the larger render" else "")) +
                                             (bodyScore?.let { " score ${"%.2f".format(it.value)} tier ${it.tier ?: "-"}${if (it.reasons.isEmpty()) "" else ": " + it.reasons.joinToString(", ")}" +
-                                                " {" + listOf("torsoRatio", "torsoFit", "thighL", "thighR", "shinL", "shinR", "armWidth", "torsoLen", "sharpness", "bodyPx").mapNotNull { k -> it.readings[k]?.let { v -> "$k ${"%.3f".format(v)}" } }.joinToString(" ") + "}" } ?: "") +
+                                                " {" + listOf("torsoRatio", "torsoFit", "thighL", "thighR", "shinL", "shinR", "legsFit", "legsMerged", "armWidth", "torsoLen", "sharpness", "bodyPx", "sitting").mapNotNull { k -> it.readings[k]?.let { v -> "$k ${"%.3f".format(v)}" } }.joinToString(" ") + "}" } ?: "") +
                                             labelNote + " busy ${"%.3f".format(busy)}"
                                     }
                                 }

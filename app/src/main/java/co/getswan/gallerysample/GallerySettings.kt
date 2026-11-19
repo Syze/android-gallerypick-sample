@@ -218,6 +218,12 @@ object GallerySettings {
     const val minBodySpanBothAnkles = 0.40f
     /** Room below the lowest ankle, as a share of the span. */
     const val minFootRoom = 0.10f
+    /** On, head to toe needs only the head and `minAnkles` ankles; the span and foot-room checks are skipped. */
+    const val headToAnkleOnly = true
+    /** Visibility an ankle needs for the head-to-toe check alone; the score keeps `bodyJointConfidence`. */
+    const val gateAnkleConfidence = 0.15f
+    /** Knees the head-to-toe check needs with `headToAnkleOnly`. */
+    const val gateKnees = 1
     /** Shoulder width over torso length for a body facing the camera; side and three-quarter from the turn. */
     const val frontShoulderSpread = 0.60f
     const val sideTurnDegrees = 45.0
@@ -230,12 +236,14 @@ object GallerySettings {
     // MARK: full-length score (values from BodyScore.swift and GallerySettings.swift)
 
     const val fullLengthScoreV2 = true
-    const val fullLengthTierALine = 0.70f
+    /** 0.55 since 19 Nov 2026 (was 0.70), with the ankle-only gate and the softer light lines. */
+    const val fullLengthTierALine = 0.55f
     const val fullLengthUsableFloor = 0.45f
     const val objectReadEnabled = true
     const val looseGarmentGateEnabled = true
     const val looseTorsoFit = 0.35
-    const val looseLegsFit = 0.35
+    /** 0.50 since 19 Nov 2026 (was 0.35): a coat hem over the thighs reads 0.42-0.50. */
+    const val looseLegsFit = 0.50
     /** Android only: the legs read as one shape (the mask unbroken between the two thigh centres on this share of
      *  the thigh rows) count as loose, as a long coat is. iOS reaches the same verdict another way: Vision loses a
      *  knee under the coat, so its thigh run spans the whole garment. MediaPipe keeps every joint, so the midline
@@ -246,6 +254,8 @@ object GallerySettings {
      *  Kept as a switch; the reading stays in `scoreInputs.legsMerged`. */
     const val looseLegsMergedEnabled = false
     const val torsoUnreadNoTier = true
+    /** On, a photo of the shopper sitting gets no tier: shown, never pre-selected. */
+    const val sittingNoTier = true
 
     // MARK: hands (GallerySettings.swift and MuseScore.swift values)
 

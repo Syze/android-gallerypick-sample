@@ -32,11 +32,14 @@ data class BodyCheck(
     /** The 33 pose landmarks of the kept body, normalised; empty when none. For the body score. */
     val landmarks: List<PointF> = emptyList(),
     val visibility: List<Float> = emptyList(),
+    /** Knees seen, for the head-to-toe check. */
+    val knees: Int = 0,
 ) {
     var shopperFaces = 1
     val hasOthers: Boolean get() = people > max(1, shopperFaces)
     /** Head to toe: head in frame, enough ankles, a body tall enough, room below the ankles for the feet. */
     val isHeadToToe: Boolean get() {
+        if (GallerySettings.headToAnkleOnly) return headSeen && ankles >= GallerySettings.minAnkles && knees >= GallerySettings.gateKnees
         val needed = if (ankles >= 2) GallerySettings.minBodySpanBothAnkles else GallerySettings.minBodySpan
         return headSeen && ankles >= GallerySettings.minAnkles && span >= needed && footRoom >= GallerySettings.minFootRoom * span
     }
@@ -80,7 +83,7 @@ object BodyPose {
         // MediaPipe places a joint outside the frame with a confident visibility, where Vision has no
         // point at all: a joint counts only inside the frame and present.
         fun inFrame(p: NormalizedLandmark) = p.x() in 0f..1f && p.y() in 0f..1f && p.presence().orElse(1f) >= GallerySettings.bodyJointConfidence
-        fun seen(pose: List<NormalizedLandmark>, idx: List<Int>) = idx.map { pose[it] }.filter { inFrame(it) && vis(it) >= GallerySettings.bodyJointConfidence }
+        fun seen(pose: List<NormalizedLandmark>, idx: List<Int>, atLeast: Float = GallerySettings.bodyJointConfidence) = idx.map { pose[it] }.filter { inFrame(it) && vis(it) >= atLeast }
 
         var pose = poses[0]
         if (face != null) {
@@ -91,9 +94,11 @@ object BodyPose {
             pose = best
         }
         val knees = seen(pose, KNEES); val ankles = seen(pose, ANKLES); val head = seen(pose, HEAD)
+        // The gate's ankles, at `gateAnkleConfidence`; the lower-joint count keeps the usual line.
+        val gateAnkles = seen(pose, ANKLES, GallerySettings.gateAnkleConfidence)
         // y runs top to bottom here: the span is the lowest ankle less the highest head point.
         var span = 0f
-        val top = head.minOfOrNull { it.y() }; val bottom = ankles.maxOfOrNull { it.y() }
+        val top = head.minOfOrNull { it.y() }; val bottom = gateAnkles.maxOfOrNull { it.y() }
         if (top != null && bottom != null) span = max(0f, bottom - top)
         val w = bitmap.width.toFloat(); val h = bitmap.height.toFloat()
         fun pixel(i: Int): PointF? { val p = pose[i]; return if (inFrame(p) && vis(p) >= GallerySettings.spreadJointConfidence) PointF(p.x() * w, p.y() * h) else null }
@@ -103,9 +108,10 @@ object BodyPose {
         val torso = if (neck != null && root != null) hypot(neck.x - root.x, neck.y - root.y).takeIf { it > 1 } else null
         val spread = if (torso != null) { val a = pixel(L_SHOULDER); val b = pixel(R_SHOULDER); if (a != null && b != null) abs(a.x - b.x) / torso else null } else null
         return BodyCheck(
-            lowerJoints = knees.size + ankles.size, ankles = ankles.size, headSeen = head.isNotEmpty(),
+            lowerJoints = knees.size + ankles.size, ankles = gateAnkles.size, headSeen = head.isNotEmpty(),
             span = span, footRoom = bottom?.let { 1f - it } ?: 0f, people = people, shoulderSpread = spread,
             landmarks = pose.map { PointF(it.x(), it.y()) }, visibility = pose.map { if (inFrame(it)) vis(it) else 0f },
+            knees = knees.size,
         )
     }
 
