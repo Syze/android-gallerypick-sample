@@ -681,7 +681,7 @@ early stop and no cap.
 
 Streaming is what makes the wait bearable: the grid fills from the first match
 rather than at the end, so the user starts choosing while the scan is still
-running. Report progress with `onGalleryScanProgress` so the screen can show it,
+running. Until the first visible photo arrives the grid shows skeleton tiles. Report progress with `onGalleryScanProgress` so the screen can show it,
 and count iCloud downloads into it: queue one, add one to `total`; settle one,
 add one to `done`. Otherwise the bar reaches 100% while downloads still run and
 the picker stays locked with nothing to show for it.

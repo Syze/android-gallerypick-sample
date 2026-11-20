@@ -28,6 +28,9 @@ object GallerySettings {
     /** A frame joins the blend when its face detail is at least this share of the sharpest frame's. Android has no
      *  capture-quality model (iOS: Vision quality 0.3 and up), so the floor is relative; the log shows each frame's detail. */
     const val blendDetailShare = 0.4f
+    /** The sharpest selfie frame must reach this face detail (Laplacian variance, 256 px face crop), else the page asks for
+     *  a retake (`selfie-too-blurry`), as iOS does at Vision quality 0.25. Set low: good frames read 0.6 to 10 in tests. */
+    const val selfieMinDetail = 0.3f
     /** A camera shot must be the shopper in the selfie, at the scan's cut; the page shows `captureNotShopperWhy`. */
     const val captureIdentityCheck = true
     const val captureNotShopperWhy = "not the person in the selfie"
@@ -236,8 +239,8 @@ object GallerySettings {
     // MARK: full-length score (values from BodyScore.swift and GallerySettings.swift)
 
     const val fullLengthScoreV2 = true
-    /** 0.55 since 19 Nov 2026 (was 0.70), with the ankle-only gate and the softer light lines. */
-    const val fullLengthTierALine = 0.55f
+    /** 0.60 since 20 Nov 2026 (0.55 on 19 Nov, 0.70 before); the page pre-selects the best Tier B front or side when a slot has no Tier A. */
+    const val fullLengthTierALine = 0.60f
     const val fullLengthUsableFloor = 0.45f
     const val objectReadEnabled = true
     const val looseGarmentGateEnabled = true
@@ -312,9 +315,10 @@ object GallerySettings {
     const val garmentReadOnTorso = true
     val torsoGarmentLabels = setOf("suit", "tuxedo")
     const val fullLengthOutfitMultiplier = true
-    /** "Busy top" line on the torso crop's gradient. Android 0.13 beside iOS 0.11: the crop hangs off ML Kit's larger
-     *  box and reads about 1.2× iOS on the same photos (eight shared bodies, 16 Nov); 0.13 fires on the same ones. */
-    const val busyTorso = 0.13f
+    /** "Busy top" line on the torso crop's gradient. 0.12 since 20 Nov 2026 (was 0.13): with the box-average resize
+     *  in `Labels.busyness` the reading sits 0 to 0.007 over iOS on 14 shared bodies (the crop hangs off ML Kit's
+     *  larger box), so iOS's 0.11 plus that margin fires on exactly the photos iOS fires on. */
+    const val busyTorso = 0.12f
 
     /** The garment caps a photo's labels call for, and whether a loose garment was named. Null when nothing hits. */
     fun garmentCaps(garments: List<Pair<String, Float>>): BodyScore.Caps? {
@@ -422,4 +426,7 @@ object GallerySettings {
     /** Debug builds: two more garment reads per matched body in the trail (ML Kit on the torso crop, and MediaPipe's
      *  image classifier on the crop and the whole photo). Logged only, no scoring; for setting a blazer line. */
     val debugGarmentReads = BuildConfig.DEBUG
+    /** Debug builds: the trail also carries the face's landmarker width and eye spacing beside the box width,
+     *  to calibrate the size gate against iOS. No gate reads them. */
+    val debugFaceWidths = BuildConfig.DEBUG
 }

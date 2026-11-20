@@ -73,10 +73,15 @@ of three readings, plus up to 0.1 for visible skin:
 | Fit, thigh | under 0.45 × the torso length | 0.70 × or more | Wide trousers or a skirt hide the legs |
 | Fit, shin | under 0.30 × the torso length | 0.50 × or more | |
 | Fit, arm | under 0.25 × the torso length | 0.45 × or more | Wide sleeves hide the arms |
-| Outline | contrast at the edge 0.14 or more | 0.04 or less | Clothes that blend into the background |
-| Light | mean light 0.10 or more | 0.03 or less | Only a silhouette fails; black clothes pass |
+| Outline | contrast across the edge 0.14 or more | 0.04 or less | Clothes that blend into the background |
+| Light | mean light 0.05 or more | 0.015 or less | Only a silhouette fails; black clothes pass |
 
 A region the joints cannot place scores 0.
+
+The mask and the outline are read with the body brought to a fixed scale
+(the torso at 400 px) and the outline contrast over an 8 px band either side
+of the edge, so the same photo reads the same whatever size it was rendered
+at. Sharpness is read at the render.
 
 ### Step 2: what lowers a region
 

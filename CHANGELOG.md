@@ -22,6 +22,17 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Mobile:** the photo top-up camera asks for an upright 3:4 frame by width and
+  height (1440 by 1920), not by height alone: a square crops the head and feet,
+  and Android returned a square when only the height was asked. The selfie
+  camera stays square. <!-- reconstructed from the useCameraStream.ts diff on 20 Nov; check wording -->
+- **The grid no longer goes blank while the scan runs.** Fronts and sides stay
+  hidden until they are picked, so a scan whose first matches were bodies
+  showed a white grid over the progress line. The grid now draws skeleton
+  tiles until the first visible photo arrives (`SCAN_EMPTY_GRID_SKELETON`).
+
 ## [1.3.22] — 2026-11-19
 
 **Page and controller.** The controller update replaces `LibraryScan.swift`,

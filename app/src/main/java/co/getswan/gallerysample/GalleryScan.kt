@@ -58,6 +58,9 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
             if (recognizer == null) { complete(run, JSONArray(), limited, error = "no-face-model"); return@execute }
 
             val reference = chooseReference(frames) ?: run { complete(run, JSONArray(), limited, error = "no-face-in-selfie"); return@execute }
+            // Too blurred to be the reference (`selfieMinDetail`); the page returns to the selfie screen.
+            val sharpestDetail = reference.frames.maxOf { it.detail }
+            if (sharpestDetail < GallerySettings.selfieMinDetail) { Log.i(TAG, "selfie rejected: sharpest frame detail %.2f, under ${GallerySettings.selfieMinDetail}".format(sharpestDetail)); complete(run, JSONArray(), limited, error = "selfie-too-blurry"); return@execute }
             rejection(reference)?.let { complete(run, JSONArray(), limited, error = it); return@execute }
             val freshReference = recognizer.embedding(reference.bitmap, reference.face, FaceVision.landmarks(reference.bitmap, reference.face))
                 ?: run { complete(run, JSONArray(), limited, error = "no-face-in-selfie"); return@execute }
@@ -114,6 +117,7 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
                 // Garment labels of a matched body, kept whole in the trail (the outcome line is cut at 160).
                 var garmentNote: String? = null
                 var garmentReads: JSONObject? = null
+                var faceWidths: JSONObject? = null
                 // A photo the store already knows is counted without a load.
                 val stored = store?.record(asset)
                 val decided: String? = stored?.let { r -> when (r.verdict) {
@@ -175,6 +179,7 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
                         val faces = all.filter { it.width >= widestNorm * S.bystanderRatio }
                         val widestPx = widestNorm * maxOf(render.width.toFloat(), scanWidth)
                         facePx = widestPx
+                        if (S.debugFaceWidths) faceWidths = timed("debugWidths") { FaceVision.debugWidths(render, faces.first()) }
                         // Past the cheap gates: the scan render, unless the larger one is already in hand.
                         var smallCopy: Bitmap? = null
                         if (render.width < scanWidth && faces.size == 1 && widestPx >= S.minFacePixels) timed("decode") { load(asset) }?.let { full -> smallCopy = render; render = full }
@@ -319,7 +324,7 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
                 // (the small copy, when kept, is freed with the render below)
                 store?.saveIfDue()
                 if (report != null || evalLabels != null) trail[asset.id] = JSONObject().put("id", asset.id).put("file", asset.file).put("taken", taken.format(Date(asset.takenAt)))
-                    .put("outcome", outcome.substringBefore(" [").substringBefore(" head {").substringBefore(" photo {").take(160)).put("facePx", facePx.toInt()).put("ms", System.currentTimeMillis() - t0).putOpt("garments", garmentNote).putOpt("garmentReads", garmentReads)
+                    .put("outcome", outcome.substringBefore(" [").substringBefore(" head {").substringBefore(" photo {").take(160)).put("facePx", facePx.toInt()).put("ms", System.currentTimeMillis() - t0).putOpt("garments", garmentNote).putOpt("garmentReads", garmentReads).putOpt("faceWidths", faceWidths)
                 if (GallerySettings.scanLogEnabled) Log.d(TAG, "  #${i + 1}/${assets.size} ${asset.id}: $outcome (${System.currentTimeMillis() - t0}ms)")
                 val now = System.currentTimeMillis()
                 if (now - lastProgress >= S.progressIntervalMs || i == assets.lastIndex) {

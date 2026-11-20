@@ -425,9 +425,17 @@ used it in the library), with the same tiers as iOS. The T-shirt fronts read
 0.77 / 0.80 Tier A (iOS 0.98); the rest of that gap was "busy top". Readings
 compared on the shared photos, and the lines set from them:
 
-- `busy`: Android reads about 1.2× iOS on every shared body (0.088 vs 0.079 …
-  0.150 vs 0.120). Line 0.13 beside iOS 0.11 fires on exactly the photos iOS
-  fires on.
+- `busy`: Android read about 1.2× iOS on every shared body (0.088 vs 0.079 …
+  0.150 vs 0.120), so its line sat at 0.13 beside iOS 0.11. On 20 Nov the cause
+  was found in the resize: a one-step bilinear shrink of the torso crop keeps
+  aliasing that a box average (what Core Graphics does) removes. With the box
+  average the reading is 0 to 0.007 over iOS on 14 shared bodies (ML Kit's
+  larger box moves the crop), so the line is 0.12: iOS's 0.11 plus that margin,
+  which fires on exactly the photos iOS fires on.
+- `facePx` scale: MediaStore reports a rotated photo's stored pixels (most
+  iPhone portraits are stored landscape), and the scan took the stored width
+  as upright, so faces on those photos read a third bigger than iOS reads them.
+  Since 20 Nov the asset list swaps width and height by the orientation flag.
 - `facePx`: ML Kit's box is 1.51× Vision's as a median of 32, but the ratio
   is 1.5–2.2× on close selfies and only 1.1–1.3× on the far faces the floor
   is about. A floor of 170 was tried and dropped every full-length photo

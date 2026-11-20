@@ -31,7 +31,7 @@ object GalleryPhotos {
         val projection = arrayOf(
             MediaStore.Images.Media._ID, MediaStore.Images.Media.DATE_TAKEN, MediaStore.Images.Media.DATE_ADDED,
             MediaStore.Images.Media.MIME_TYPE, MediaStore.Images.Media.SIZE, MediaStore.Images.Media.RELATIVE_PATH,
-            MediaStore.Images.Media.WIDTH, MediaStore.Images.Media.HEIGHT, MediaStore.Images.Media.DATE_MODIFIED, MediaStore.Images.Media.DISPLAY_NAME,
+            MediaStore.Images.Media.WIDTH, MediaStore.Images.Media.HEIGHT, MediaStore.Images.Media.ORIENTATION, MediaStore.Images.Media.DATE_MODIFIED, MediaStore.Images.Media.DISPLAY_NAME,
         ) + (if (Build.VERSION.SDK_INT >= 30) arrayOf(MediaStore.Images.Media.IS_FAVORITE) else emptyArray())
         val from = Calendar.getInstance().apply { add(Calendar.MONTH, -months) }.timeInMillis
         // DATE_TAKEN is missing on some rows; DATE_ADDED (seconds) stands in for those.
@@ -53,6 +53,7 @@ object GalleryPhotos {
             val pathCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.RELATIVE_PATH)
             val wCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH)
             val hCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.HEIGHT)
+            val orientCol = c.getColumnIndex(MediaStore.Images.Media.ORIENTATION)
             val favCol = if (Build.VERSION.SDK_INT >= 30) c.getColumnIndex(MediaStore.Images.Media.IS_FAVORITE) else -1
             val modCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED)
             val nameCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
@@ -61,8 +62,12 @@ object GalleryPhotos {
                 if (c.getString(pathCol)?.contains("Screenshots", ignoreCase = true) == true) { screenshots++; continue }
                 val id = c.getLong(idCol)
                 val takenAt = c.getLong(takenCol).takeIf { it > 0 } ?: (c.getLong(addedCol) * 1000L)
+                // Upright size: MediaStore reports the stored pixels, and a rotated photo (most iPhone
+                // portraits) is stored landscape, which would inflate the face-size floor by a third.
+                val rotated = orientCol >= 0 && (c.getInt(orientCol) == 90 || c.getInt(orientCol) == 270)
+                val width = if (rotated) c.getInt(hCol) else c.getInt(wCol); val height = if (rotated) c.getInt(wCol) else c.getInt(hCol)
                 assets.add(Asset(id.toString(), ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id),
-                    takenAt, c.getString(mimeCol) ?: "image/jpeg", c.getLong(sizeCol), c.getInt(wCol), c.getInt(hCol), favCol >= 0 && c.getInt(favCol) == 1, c.getLong(modCol), c.getString(nameCol) ?: ""))
+                    takenAt, c.getString(mimeCol) ?: "image/jpeg", c.getLong(sizeCol), width, height, favCol >= 0 && c.getInt(favCol) == 1, c.getLong(modCol), c.getString(nameCol) ?: ""))
             }
         }
         return assets to screenshots

@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.PointF
 import android.graphics.RectF
+import org.json.JSONObject
 import android.util.Log
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.core.BaseOptions
@@ -111,6 +112,19 @@ object FaceVision {
         val result = runCatching { d.detect(BitmapImageBuilder(crop).build()) }.getOrNull() ?: return emptyList()
         val points = result.faceLandmarks().firstOrNull() ?: return emptyList()
         return points.map { PointF(head.left + it.x() * head.width(), head.top + it.y() * head.height()) }
+    }
+
+    /** Debug (`debugFaceWidths`): the face's width three ways, in render pixels: the detector box, the landmarker's
+     *  points (widest extent, and the cheek points 234 to 454) and the pupil spacing. Null without landmarks. */
+    fun debugWidths(bitmap: Bitmap, face: Face): JSONObject? {
+        val points = landmarks(bitmap, face)
+        if (points.size < 478) return null
+        val w = bitmap.width; val h = bitmap.height
+        val extent = (points.maxOf { it.x } - points.minOf { it.x }) * w
+        val cheeks = hypot((points[454].x - points[234].x) * w, (points[454].y - points[234].y) * h)
+        val height = hypot((points[152].x - points[10].x) * w, (points[152].y - points[10].y) * h)
+        return JSONObject().put("box", (face.width * w).toInt()).put("extent", extent.toInt()).put("cheeks", cheeks.toInt())
+            .put("height", height.toInt()).putOpt("eyes", eyeSpacing(points, w, h)?.toInt()).put("render", w)
     }
 
     /** Fallback for `landmarks` (`mlKitLandmarkFallback`): ML Kit's eye centres, nose base and mouth corners on the

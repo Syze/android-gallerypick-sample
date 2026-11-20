@@ -20,6 +20,7 @@ import kotlin.math.acos
 import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlin.math.max
+import kotlin.math.roundToInt
 import kotlin.math.min
 import kotlin.math.pow
 
@@ -68,6 +69,11 @@ class BodyScore private constructor(
         const val sittingLegs = 0.8f; const val sittingTorso = 0.9f
         const val crossedAnkles = 0.15
         val sharpness = 0.003 to 0.0005; const val sharpnessFloor = 0.3f
+        /** On, the body is read with the torso at `fixedTorsoPixels` whatever the render size, so the mask and outline
+         *  readings come out the same for the same photo (sharpness stays at the render). Off: read at the render. */
+        const val fixedScaleEnabled = true; const val fixedTorsoPixels = 400.0
+        /** Pixels sampled either side of the body's edge for the outline contrast: a band moves less than the edge itself. */
+        const val outlineBand = 8
         const val minBodyPixels = 400.0
         const val jointConfidence = 0.3f
         val weights = listOf("visibility" to 0.7f, "openness" to 0.2f, "quality" to 0.1f)
@@ -103,8 +109,20 @@ class BodyScore private constructor(
 
         /** `bitmap`: the render the pose was read on; `body`: the kept pose; `face`: the matched face box (normalised,
          *  top-left origin); `originalScale`: original pixels per render pixel; `objects`: from `BodyObjects`. */
-        fun compute(bitmap: Bitmap, body: BodyCheck, face: RectF?, originalScale: Double, caps: Caps? = null, objects: List<BodyObjects.Object> = emptyList(),
+        fun compute(render: Bitmap, body: BodyCheck, face: RectF?, originalScale: Double, caps: Caps? = null, objects: List<BodyObjects.Object> = emptyList(),
                     debugName: String? = null): BodyScore? {
+            // Fixed scale: the torso brought to `fixedTorsoPixels` before anything is read — see the constant.
+            var scaleToOriginal = originalScale
+            val bitmap = run {
+                fun pt(i: Int) = if ((body.visibility.getOrNull(i) ?: 0f) >= 0.1f) body.landmarks.getOrNull(i) else null
+                val ls = pt(LS); val rs = pt(RS); val lh = pt(LH); val rh = pt(RH)
+                if (!fixedScaleEnabled || ls == null || rs == null || lh == null || rh == null) return@run render
+                val torso = hypot(((ls.x + rs.x) / 2 - (lh.x + rh.x) / 2) * render.width, ((ls.y + rs.y) / 2 - (lh.y + rh.y) / 2) * render.height).toDouble()
+                val s = if (torso > 1) fixedTorsoPixels / torso else 1.0
+                if (abs(s - 1) <= 0.02) return@run render
+                scaleToOriginal /= s
+                Bitmap.createScaledBitmap(render, max(1, (render.width * s).roundToInt()), max(1, (render.height * s).roundToInt()), true)
+            }
             val w = bitmap.width; val h = bitmap.height
             val px = IntArray(w * h); bitmap.getPixels(px, 0, w, 0, 0, w, h)
             fun lum(x: Int, y: Int): Float {
@@ -187,8 +205,8 @@ class BodyScore private constructor(
             class Run(var width: Double, var edge: Double, var light: Double, var skin: Double) { var x = 0; var y = 0 }
             fun edgeAt(xi: Int, y: Int, dir: Int): Float {
                 var inside = 0f; var outside = 0f
-                for (k in 0 until 3) { inside += lum(xi - dir * k, y); outside += lum(xi + dir * (k + 1), y) }
-                return abs(inside - outside) / 3
+                for (k in 0 until outlineBand) { inside += lum(xi - dir * k, y); outside += lum(xi + dir * (k + 1), y) }
+                return abs(inside - outside) / outlineBand
             }
             fun run(y: Int, cx: Int, minX: Int = 0, maxX: Int = w - 1, cutArms: Boolean): Run? {
                 if (y < 0 || y >= h || !on(cx, y)) return null
@@ -274,8 +292,8 @@ class BodyScore private constructor(
                 var lightSum = 0f; var skin = 0; var n = 0
                 for (m in 0..k) { val x = (c.x + nx * m).toInt(); val y = (c.y + ny * m).toInt(); lightSum += lum(x, y); if (isSkin(x, y)) skin++; n++ }
                 var ei = 0f; var eo = 0f
-                for (m in 0 until 3) { ei += lum((c.x + nx * (k - m)).toInt(), (c.y + ny * (k - m)).toInt()); eo += lum((c.x + nx * (k + m + 1)).toInt(), (c.y + ny * (k + m + 1)).toInt()) }
-                return Run((2 * k + 1).toDouble(), (abs(ei - eo) / 3).toDouble(), lightSum.toDouble() / max(n, 1), skin.toDouble() / max(n, 1))
+                for (m in 0 until outlineBand) { ei += lum((c.x + nx * (k - m)).toInt(), (c.y + ny * (k - m)).toInt()); eo += lum((c.x + nx * (k + m + 1)).toInt(), (c.y + ny * (k + m + 1)).toInt()) }
+                return Run((2 * k + 1).toDouble(), (abs(ei - eo) / outlineBand).toDouble(), lightSum.toDouble() / max(n, 1), skin.toDouble() / max(n, 1))
             }
             val armWidths = ArrayList<Double>(); val armRuns = ArrayList<Run>()
             for ((a, b) in listOf(lS to lE, rS to rE, lE to lW, rE to rW)) {
@@ -409,15 +427,22 @@ class BodyScore private constructor(
             readings["kneeDrop"] = kneeDrop; readings["thighTilt"] = thighTilt; readings["kneeAngle"] = kneeAngle; readings["torsoTilt"] = torsoTilt
             readings["sitting"] = if (sitting) 1.0 else 0.0; readings["armsCrossed"] = if (armsCrossed) 1.0 else 0.0; readings["handsHidden"] = if (handsHidden) 1.0 else 0.0; readings["legsCrossed"] = if (legsCrossed) 1.0 else 0.0
 
-            // Image quality: sharpness over the mask, and the body's height in the original.
+            // Image quality: sharpness over the mask, and the body's height in the original. Sharpness is read at
+            // the render, not the fixed scale, since resampling smooths or sharpens it.
+            val rw = render.width; val rh = render.height
+            val rpx = if (render === bitmap) px else IntArray(rw * rh).also { render.getPixels(it, 0, rw, 0, 0, rw, rh) }
+            fun rlum(x: Int, y: Int): Float {
+                if (x < 0 || y < 0 || x >= rw || y >= rh) return 0f
+                val c = rpx[y * rw + x]; return luma(((c shr 16) and 255).toFloat(), ((c shr 8) and 255).toFloat(), (c and 255).toFloat()) / 255
+            }
             var lapSum = 0.0; var lapSq = 0.0; var ln = 0.0
             var yy = 2
-            while (yy < h - 2) { var xx = 2; while (xx < w - 2) { if (on(xx, yy)) { val l = 4 * lum(xx, yy) - lum(xx - 1, yy) - lum(xx + 1, yy) - lum(xx, yy - 1) - lum(xx, yy + 1); lapSum += l; lapSq += (l * l).toDouble(); ln += 1 }; xx += 3 }; yy += 3 }
+            while (yy < rh - 2) { var xx = 2; while (xx < rw - 2) { if (on(xx * w / rw, yy * h / rh)) { val l = 4 * rlum(xx, yy) - rlum(xx - 1, yy) - rlum(xx + 1, yy) - rlum(xx, yy - 1) - rlum(xx, yy + 1); lapSum += l; lapSq += (l * l).toDouble(); ln += 1 }; xx += 3 }; yy += 3 }
             val sharp = if (ln > 0) lapSq / ln - (lapSum / ln) * (lapSum / ln) else 0.0
             val quality = max(sharpnessFloor, (ramp(sharp, sharpness) ?: 0.0).toFloat())
             val headTop = HEAD.mapNotNull { joint(it) }.minOfOrNull { it.y }
             val footY = listOfNotNull(lA, rA).maxOfOrNull { it.y }
-            val bodyPixels = if (headTop != null && footY != null) (footY - headTop) * originalScale else null
+            val bodyPixels = if (headTop != null && footY != null) (footY - headTop) * scaleToOriginal else null
             readings["sharpness"] = sharp; readings["bodyPx"] = bodyPixels; legsMerged?.let { readings["legsMerged"] = it }
             var filter: String? = null
             if (bodyPixels != null && bodyPixels < minBodyPixels) filter = "body under ${minBodyPixels.toInt()} px"
