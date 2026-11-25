@@ -65,6 +65,8 @@ class GalleryActivity : AppCompatActivity() {
         // The page sits inside the system bars, like the iOS sample under its safe areas; the page's
         // own header and footer spacing is all that remains, so nothing is padded here.
         setContentView(R.layout.activity_gallery)
+        // The text model downloads in the background while the shopper takes the selfie.
+        MlKitModels.request(this)
         loading = findViewById(R.id.loading)
         webView = findViewById(R.id.webView)
         session = SwanSession.load(this)
@@ -75,6 +77,15 @@ class GalleryActivity : AppCompatActivity() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) loadPage()
         else askCamera.launch(Manifest.permission.CAMERA)
     }
+
+    /** Keeps the screen on while photos upload and the Muse builds, so a locked phone does not suspend the page
+     *  mid-way; cleared on every end state and whenever the activity leaves the foreground. Main thread. */
+    private fun setKeepAwake(on: Boolean) {
+        if (on) window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
+    override fun onPause() { setKeepAwake(false); super.onPause() }
 
     override fun onDestroy() {
         main.removeCallbacks(webReadyWatchdog)
@@ -165,7 +176,7 @@ class GalleryActivity : AppCompatActivity() {
             "GALLERY_FULL_IMAGE" -> sendFullImage(payload.optString("assetId"))
             "GALLERY_CAPTURE_PHOTO" -> scan.storeCapture(payload.optString("id"), payload.optString("dataURI"), payload.optString("shot"))
             "GALLERY_CLEAR_CAPTURES" -> scan.clearCaptures()
-            "GALLERY_RESET" -> scan.clearAll()
+            "GALLERY_RESET" -> { scan.clearAll(); runOnUiThread { setKeepAwake(false) } }
             "GALLERY_PICK_MORE" -> runOnUiThread { askPhotos.launch(photoPermissions()) }   // Android 14+: re-opens the "selected photos" sheet
             "SCHEME_TEST_RESULT" -> Log.i(TAG, "photo scheme ${if (payload.optBoolean("ok")) "works" else "blocked, base64 fallback"}")
             "OPEN_SETTINGS" -> startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
@@ -173,6 +184,11 @@ class GalleryActivity : AppCompatActivity() {
             // The page's token was refused: the kept session is dropped and sign-in asks again.
             "GALLERY_TOKEN_EXPIRED" -> { SwanSession.clear(this); fail(getString(R.string.error_expired)) }
             "COMPONENT_CALLBACK" -> {
+                // The screen stays on while photos upload and the Muse builds, as the iOS host does (`setKeepAwake`).
+                when (message.optString("callbackName")) {
+                    "onUploadStart", "onMuseStart" -> runOnUiThread { setKeepAwake(true) }
+                    "onMuseEnd", "onComplete", "onError" -> runOnUiThread { setKeepAwake(false) }
+                }
                 report?.noteCallback(message.optString("callbackName"), message.optJSONObject("payload"))
                 Log.i(TAG, "callback ${message.optString("componentName")}.${message.optString("callbackName")} ${message.opt("payload") ?: ""}")
             }

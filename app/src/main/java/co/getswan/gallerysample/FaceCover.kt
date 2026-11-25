@@ -25,8 +25,11 @@ data class FaceCover(val hairline: Float, val jaw: Float, val face: Float, var s
 
         private lateinit var appContext: Context
         fun init(context: Context) { appContext = context.applicationContext }
+        fun release() = segmenter.release()
+        /** The same segmenter for the body score (`GallerySettings.shareSelfieSegmenter`): one copy of the model, not two. */
+        internal fun shared(): ImageSegmenter? = segmenter.get()
 
-        private val segmenter: ImageSegmenter? by lazy {
+        private val segmenter = Reloadable<ImageSegmenter> {
             runCatching {
                 ImageSegmenter.createFromOptions(appContext, ImageSegmenter.ImageSegmenterOptions.builder()
                     .setBaseOptions(BaseOptions.builder().setModelAssetPath(MODEL).build())
@@ -39,7 +42,7 @@ data class FaceCover(val hairline: Float, val jaw: Float, val face: Float, var s
 
         /** Reads the head crop. `face` is the face box in crop pixels; `landmarks` (0-1 on the crop) only for `skinSideRatio`. */
         fun read(headCrop: Bitmap, face: RectF, landmarks: List<PointF>? = null): FaceCover? {
-            val s = segmenter ?: return null
+            val s = segmenter.get() ?: return null
             val longest = max(headCrop.width, headCrop.height)
             val scale = if (longest > INPUT_PIXELS) INPUT_PIXELS.toFloat() / longest else 1f
             val small = if (scale < 1f) Bitmap.createScaledBitmap(headCrop, max(1, (headCrop.width * scale).toInt()), max(1, (headCrop.height * scale).toInt()), true) else headCrop

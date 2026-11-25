@@ -20,8 +20,9 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Androidgallerysample">
-        <!-- Play services fetches the ML Kit face model at install, so the first scan does not wait for it. -->
-        <meta-data android:name="com.google.mlkit.vision.DEPENDENCIES" android:value="face" />
+        <!-- Play services fetches the ML Kit face and text (ocr) models at install from the Play Store, so the first
+             scan does not wait for them; other installs fetch them on first use (MlKitModels.kt). -->
+        <meta-data android:name="com.google.mlkit.vision.DEPENDENCIES" android:value="face,ocr" />
         <activity
             android:name=".SignInActivity"
             android:exported="true"

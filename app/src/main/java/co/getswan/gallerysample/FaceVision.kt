@@ -75,7 +75,9 @@ object FaceVision {
     /** Points on one head crop: one face, no blendshapes. */
     private val detector: FaceLandmarker? by lazy { build(numFaces = 1, blendshapes = false) }
     /** Expression on a head crop: one face, blendshapes and the head transform. */
-    private val reader: FaceLandmarker? by lazy { build(numFaces = 1, blendshapes = true) }
+    private val reader = Reloadable<FaceLandmarker> { build(numFaces = 1, blendshapes = true) }
+    /** Frees the expression reader; the box finders, the point landmarker and the face match stay for the camera check. */
+    fun release() = reader.release()
 
     private fun build(numFaces: Int, blendshapes: Boolean): FaceLandmarker? = runCatching {
         val options = FaceLandmarker.FaceLandmarkerOptions.builder()
@@ -88,7 +90,7 @@ object FaceVision {
         FaceLandmarker.createFromOptions(appContext, options)
     }.onFailure { Log.e(TAG, "Could not load the face landmarker: ${it.message}") }.getOrNull()
 
-    fun warmUp() { boxes.get(); detector; reader }
+    fun warmUp() { boxes.get(); detector; reader.get() }
 
     /** Every face box in the photo, widest first, from ML Kit on a copy no larger than `detectPixels`. */
     fun detect(bitmap: Bitmap, careful: Boolean = false): List<Face> {
@@ -144,7 +146,7 @@ object FaceVision {
 
     /** The expression on a matched face, read from the head crop as iOS does. Nil when no face is found there. */
     fun expression(bitmap: Bitmap, face: Face): FaceExpression? {
-        val r = reader ?: return null
+        val r = reader.get() ?: return null
         val crop = bitmap.crop(headBox(face.box)) ?: return null
         val result = runCatching { r.detect(BitmapImageBuilder(crop).build()) }.getOrNull() ?: return null
         return FaceExpression.from(result, crop)

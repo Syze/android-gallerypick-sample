@@ -22,47 +22,85 @@ onwards; those entries are kept for reference and need nothing on your side.
 
 ## [Unreleased]
 
+### Changed
+
+- **Controller (iOS and Android samples): production builds now post the scan
+  report too.** Both environments post to the one ingest; the report's
+  User-Agent product token gains the environment as its last segment,
+  `photoApp/ios/<build>/<env>` and `photoApp/android/<build>/<env>` (`sandbox`
+  or `production`), and the telemetry page lists it as `Env` and filters by it
+  (`?env=`). Reports from earlier builds count as sandbox. The ingest key now
+  ships in production builds as well; return nil (iOS) or null (Android) from
+  `SwanEnvironment` to turn reports off for a build. Controller update: yes,
+  `SwanEnvironment.swift` and `ScanReport.swift` (and `.kt`).
+
+### Changed
+
+- **Controller (iOS and Android samples):** the scan report's User-Agent product
+  token now names the platform and build, `photoApp/ios/<build>` and
+  `photoApp/android/<build>` (was `photoApp/<build>` and
+  `photoApp-android/<build>`), so the telemetry page can filter by platform and
+  client. Controller update: yes, `ScanReport.swift` (and `ScanReport.kt`).
+
+- **Android sample: a release build to time scans, and a smaller, lighter app.**
+  - A `sandboxRelease` variant, signed with the debug key, runs without the debug
+    extras (face widths, extra garment reads, mask pictures); it installs over
+    `sandboxDebug`. Release builds are shrunk with R8 (keep rules in
+    `app/proguard-rules.pro`; MediaPipe needs its Flogger logging kept) and leave
+    out the debug-only garment classifier (now under `app/src/debug/assets`).
+  - ML Kit text reading comes from Google Play services, like face finding
+    (`MlKitModels.kt` asks for the model when the gallery opens and the scan
+    waits up to `mlKitModelWaitMs` for it; the summary's `mlKitReady` says
+    whether it was there). Labels stay bundled: the Play services label model
+    reads differently and would move the glasses, hat and scarf rules. OpenCV
+    is a slim build of the official package with only the face match's modules
+    (`app/src/main/jniLibs`, `app/libs/opencv-build/README.md`), its SFace
+    vectors identical bit for bit. The arm64 release APK goes from 148 MB to
+    110 MB.
+  - The readers only the scan uses are closed when it ends and after each
+    camera shot, and load again on their next use (`releaseModelsAfterScan`);
+    the body score and the face cover share one copy of the selfie segmenter
+    (`shareSelfieSegmenter`). The idle app holds about 120–160 MB after a scan
+    (was 560 MB) and a scan peaks at about 830 MB (was about 1,000 MB). Four
+    scans in one session hold the same memory after each: no leak.
+  - The read-ahead also loads the 1536 px render and re-checks a small face on
+    its larger render (`lookAheadLoadsScanRender`), with 5 helper threads and
+    6 photos ahead (were 3 and 4), and skips a stored face the store already
+    decides (`lookAheadSkipsStoreDecided`); on a matched photo the readers that
+    need only the render (text, labels, hands, expression) run at the same time
+    on four threads (`parallelReaders`), as Vision batches them on iOS. On a
+    Galaxy S21 FE a 692-photo first scan takes about 130 s (was 239 s in a debug
+    build) and a repeat scan 65 s (was 163 s). Results are unchanged on every
+    check.
+  - The scan report carries `memoryPeakMB` and iOS's summary names (`total`,
+    `examined`, `matched`, `elapsedMs`, `monthsBack`, `photosPerSecond`, the
+    matches by type) beside Android's own, so the ingest table fills for both.
+  - The screen stays on while photos upload and the Muse builds, as the iOS
+    host does (`FLAG_KEEP_SCREEN_ON` on `onUploadStart`/`onMuseStart`, cleared
+    on `onMuseEnd`, `onComplete`, `onError`, reset and when the activity pauses),
+    so a locked phone does not suspend the page mid-build.
+  - Debug-only probes under `app/src/debug`, started from adb: the reader probe
+    (labels and text per photo), the scan probe (repeat scans, memory held
+    after each), the body probe (whole-photo vs body-only readings) and the
+    memory probe (what each reader adds).
+
 ### Fixed
 
-- **Mobile:** the photo top-up camera asks for an upright 3:4 frame by width and
-  height (1440 by 1920), not by height alone: a square crops the head and feet,
-  and Android returned a square when only the height was asked. The selfie
-  camera stays square. <!-- reconstructed from the useCameraStream.ts diff on 20 Nov; check wording -->
-- **The grid no longer goes blank while the scan runs.** Fronts and sides stay
-  hidden until they are picked, so a scan whose first matches were bodies
-  showed a white grid over the progress line. The grid now draws skeleton
-  tiles until the first visible photo arrives (`SCAN_EMPTY_GRID_SKELETON`).
+- **Body score: a body could be blown up many times over.** The fixed-scale
+  reading enlarges the photo until the torso is 400 px, with no upper limit, so
+  a person tiny in the frame or a pose read with its joints bunched made one
+  photo 49 MP (about 390 MB at once on a Samsung) and risked an out-of-memory
+  crash. The enlarged photo is now capped at 24 MP (`fixedScaleMaxMegapixels` in
+  `BodyScore.swift` and `BodyScore.kt`); on 1,021 labelled photos no score, tier
+  or verdict changes. Android also copies only the body area into memory
+  (`fixedScaleBodyOnly`), with the same readings on 381 bodies. Controller
+  update: yes, `BodyScore.swift`.
 
-## [1.3.22] — 2026-11-19
+## [1.3.19] — 2026-11-20
 
 **Page and controller.** The controller update replaces `LibraryScan.swift`,
 `FaceVision.swift`, `BodyScore.swift`, `GallerySettings.swift`,
 `ScanReport.swift` and `ViewController.swift` in `native-samples/`.
-
-### Fixed
-
-- **A camera selfie no longer sits in a padded tile.** The selfie stream is
-  square and grid tiles are 3:4, so a camera selfie showed grey bands above and
-  below. Camera-shot tiles now fill the tile (`is-capture`, display only); the
-  photo sent to the Muse is unchanged, and library photos still show whole.
-- **The loose-garment gate ignores the pose.** The torso rule now fires only
-  when the shopper stands upright with the arms clear of the chest: not sitting,
-  lying, leaning over 12°, arms crossed, or a wrist or elbow across the torso.
-  The legs rule gets the same guard at the 25° lean line, so a slightly tilted
-  person in a full skirt is still caught. Bending over a drawer, crouching,
-  sitting on a sofa or posing with raised arms used to read as a loose outfit;
-  on a labelled set of 784 photos, loose went from 103 to 34, and every photo
-  that stopped being loose was a pose, not clothing. `scoreInputs` gains
-  `torsoUpright`. No threshold changed.
-- **The search screen's count is visible on a phone.** "Looking through your
-  photos… 128 of 521" and its bar sat under nine placeholder tiles, below the
-  fold on most phones. They are pinned in the footer now, where the picker
-  shows the same count, so the two screens agree.
-- **No countdown for the selfie on the no-match camera.** The screen shown
-  when the scan finds nothing counted down by camera alone, so the selfie at
-  the end of the sequence got the 6 s timer meant for full-length shots. It now
-  follows the top-up rule: front and side count down on the front camera,
-  a selfie and any rear-camera shot are taken at once.
 
 ### Added
 
@@ -72,7 +110,58 @@ onwards; those entries are kept for reference and need nothing on your side.
   `captureIdentityCheck` in `GallerySettings.swift`; the Android sample does
   the same.
 
+- **Page: knows which platform hosts it.** `config.platform` (`"ios"` or
+  `"android"`) names the host; without it the page reads the bridge the host
+  exposed (`webkit.messageHandlers.swanBridge` is iOS, `window.swanBridge` is
+  Android), then the user agent, and assumes iOS. The result is logged once as
+  `[swan/gallery] platform android (config)`. An existing iOS host needs no
+  change.
+- **Page: the platform goes to the Muse and to analytics.** The build request's
+  `requestSource` is the detected platform (`android` on an Android host; it was
+  always `ios`), and every gallery event carries a `platform` field.
+- **Page: Android permission guides.** Behind `PLATFORM_GUIDES`. On an Android
+  host the photo-access and camera-blocked pages use Android's words and
+  Settings path ("Open Settings › Apps › {appName} › Permissions", "Photos and
+  videos", "Allow all"), draw the Android permission screens, and show both
+  "Open Settings" and "Try again", since Android does not restart the app
+  after a permission change. Overridable per page through
+  `content.galleryPick.libraryBlockedPage` / `cameraBlockedPage`
+  (GALLERY_PICK_TEXT_CONFIG.md). iOS pages are unchanged.
+- **Page: `config.photoScheme`.** The URL scheme the host serves thumbnails on
+  (`<scheme>://thumb?id=…`), for a host that cannot register `swan-photo`.
+  Defaults to `swan-photo`; iOS hosts send nothing.
+
 ### Changed
+
+- **Mobile:** the options row (selfie, front, side bars) shows from the moment
+  the scan starts, with empty bars, not from the first match. A shopper whose
+  first match takes a while, as with an all-iCloud library, sees the same screen
+  as everyone else.
+
+- **Controller (sample):** the body score reads the person mask and the outline
+  with the body at a fixed scale (torso 400 px) and the outline contrast over an
+  8 px band, so the same photo scores the same whatever size it was rendered at.
+  On 1021 labelled photos the outline readings that moved with render size fall
+  from 106 to 34 (torso) and 123 to 67 (arms); 22 photos change tier, 10 of them
+  up from B to A. Behind `fixedScaleEnabled` and `outlineBand` in `BodyScore`.
+  Controller update: yes, `BodyScore.swift` (and `BodyScore.kt` on Android).
+- **Controller (Android sample):** two parity fixes to the face-size floor and
+  the "busy top" reading. A rotated photo's stored size is swapped to upright
+  (most iPhone portraits are stored landscape), so a face no longer reads a
+  third bigger than on iOS; and the busy reading shrinks the torso crop with a
+  box average, as iOS does, so it sits within 0.01 of iOS; its line is 0.12
+  (was 0.13), iOS's 0.11 plus the margin ML Kit's larger crop adds. Debug builds also log each face's landmarker width beside the
+  box width (`debugFaceWidths`). Controller update: yes, `GalleryPhotos.kt`,
+  `Labels.kt`, `GallerySettings.kt`, `FaceVision.kt`, `GalleryScan.kt`.
+- **Mobile:** the picker shows from the moment the scan starts, with its skeleton
+  grid and progress line, instead of a separate searching screen until the first
+  match (`SCAN_GRID_FROM_START`). A library that is all in iCloud now looks like
+  a local one while its downloads come in.
+- **Mobile:** with no Tier A front or side left for a slot, the picker pre-selects
+  the best usable Tier B one instead of leaving the slot empty; it is locked like
+  any pre-selected body (`PRESELECT_BODY_B_FALLBACK`). The pre-select floor
+  follows the controller's Tier A line, now 0.60. Controller update: yes, the
+  sample's `fullLengthTierALine` is 0.60.
 
 - **More full-length photos are pre-selected.** Tier A for a front or side
   starts at 0.55 (was 0.70) and the page's pre-select floor follows. Head to
@@ -174,28 +263,49 @@ onwards; those entries are kept for reference and need nothing on your side.
   are now taken in the order the marker row shows: the selfie, then the two
   fronts, then the two sides. Before, the selfie came last.
 
-### Added
+### Fixed
 
-- **Page: knows which platform hosts it.** `config.platform` (`"ios"` or
-  `"android"`) names the host; without it the page reads the bridge the host
-  exposed (`webkit.messageHandlers.swanBridge` is iOS, `window.swanBridge` is
-  Android), then the user agent, and assumes iOS. The result is logged once as
-  `[swan/gallery] platform android (config)`. An existing iOS host needs no
-  change.
-- **Page: the platform goes to the Muse and to analytics.** The build request's
-  `requestSource` is the detected platform (`android` on an Android host; it was
-  always `ios`), and every gallery event carries a `platform` field.
-- **Page: Android permission guides.** Behind `PLATFORM_GUIDES`. On an Android
-  host the photo-access and camera-blocked pages use Android's words and
-  Settings path ("Open Settings › Apps › {appName} › Permissions", "Photos and
-  videos", "Allow all"), draw the Android permission screens, and show both
-  "Open Settings" and "Try again", since Android does not restart the app
-  after a permission change. Overridable per page through
-  `content.galleryPick.libraryBlockedPage` / `cameraBlockedPage`
-  (GALLERY_PICK_TEXT_CONFIG.md). iOS pages are unchanged.
-- **Page: `config.photoScheme`.** The URL scheme the host serves thumbnails on
-  (`<scheme>://thumb?id=…`), for a host that cannot register `swan-photo`.
-  Defaults to `swan-photo`; iOS hosts send nothing.
+- **Mobile:** the progress bar no longer sits full under "Still looking…" at the
+  end of a scan. Once every photo is counted (`205 of 205`) and the host is still
+  running its end-of-scan checks, the line reads "Checking the photos found…"
+  and the bar sweeps until scan complete (`SCAN_FINISHING_LINE`). New text key
+  `pickerPage.scanningFinishingText`. Controller update: no.
+- **Mobile:** right after the camera, before the first photo is counted, the
+  progress line reads "Preparing your photo library…" instead of "Still looking
+  for more photos of you…" with no count. New text key
+  `pickerPage.scanningPreparingText`. Controller update: no.
+
+- **Mobile:** the photo top-up camera asks for an upright 3:4 frame by width and
+  height (1440 by 1920), not by height alone: a square crops the head and feet,
+  and Android returned a square when only the height was asked. The selfie
+  camera stays square. <!-- reconstructed from the useCameraStream.ts diff on 20 Nov; check wording -->
+- **The grid no longer goes blank while the scan runs.** Fronts and sides stay
+  hidden until they are picked, so a scan whose first matches were bodies
+  showed a white grid over the progress line. The grid now draws skeleton
+  tiles until the first visible photo arrives (`SCAN_EMPTY_GRID_SKELETON`).
+
+- **A camera selfie no longer sits in a padded tile.** The selfie stream is
+  square and grid tiles are 3:4, so a camera selfie showed grey bands above and
+  below. Camera-shot tiles now fill the tile (`is-capture`, display only); the
+  photo sent to the Muse is unchanged, and library photos still show whole.
+- **The loose-garment gate ignores the pose.** The torso rule now fires only
+  when the shopper stands upright with the arms clear of the chest: not sitting,
+  lying, leaning over 12°, arms crossed, or a wrist or elbow across the torso.
+  The legs rule gets the same guard at the 25° lean line, so a slightly tilted
+  person in a full skirt is still caught. Bending over a drawer, crouching,
+  sitting on a sofa or posing with raised arms used to read as a loose outfit;
+  on a labelled set of 784 photos, loose went from 103 to 34, and every photo
+  that stopped being loose was a pose, not clothing. `scoreInputs` gains
+  `torsoUpright`. No threshold changed.
+- **The search screen's count is visible on a phone.** "Looking through your
+  photos… 128 of 521" and its bar sat under nine placeholder tiles, below the
+  fold on most phones. They are pinned in the footer now, where the picker
+  shows the same count, so the two screens agree.
+- **No countdown for the selfie on the no-match camera.** The screen shown
+  when the scan finds nothing counted down by camera alone, so the selfie at
+  the end of the sequence got the 6 s timer meant for full-length shots. It now
+  follows the top-up rule: front and side count down on the front camera,
+  a selfie and any rear-camera shot are taken at once.
 
 ---
 

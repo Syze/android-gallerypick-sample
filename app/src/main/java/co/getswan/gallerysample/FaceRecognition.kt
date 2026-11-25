@@ -49,30 +49,39 @@ class FaceRecognizer private constructor(private val model: FaceRecognizerSF) {
     /** The identity vector of `face` in `bitmap` from its 478 landmarker points, or ML Kit's five (`keyPoints`), unit length;
      *  null when the points are missing. */
     fun embedding(bitmap: Bitmap, face: FaceVision.Face, landmarks: List<android.graphics.PointF>): FloatArray? {
-        val p = when { landmarks.size >= 478 -> listOf(landmarks[468], landmarks[473], landmarks[1], landmarks[61], landmarks[291]); landmarks.size == 5 -> landmarks; else -> return null }
-        val w = bitmap.width.toFloat(); val h = bitmap.height.toFloat()
-        val box = face.box.pixels(bitmap)
         // OpenCV's row: box, then the eyes (image-left first), nose tip, mouth corners (image-left first).
-        val eyes = listOf(p[0], p[1]).sortedBy { it.x }
-        val mouth = listOf(p[3], p[4]).sortedBy { it.x }
-        val row = floatArrayOf(
-            box.left, box.top, box.width(), box.height(),
-            eyes[0].x * w, eyes[0].y * h, eyes[1].x * w, eyes[1].y * h,
-            p[2].x * w, p[2].y * h,
-            mouth[0].x * w, mouth[0].y * h, mouth[1].x * w, mouth[1].y * h,
-        )
-        val rgba = Mat(); Utils.bitmapToMat(bitmap, rgba)
-        val bgr = Mat(); Imgproc.cvtColor(rgba, bgr, Imgproc.COLOR_RGBA2BGR); rgba.release()
-        val points = Mat(1, 15, CvType.CV_32F).also { it.put(0, 0, row); it.put(0, 14, floatArrayOf(1f)) }
-        val aligned = Mat(); val feature = Mat()
+        val row = row(bitmap, face, landmarks) ?: return null
+        val aligned = alignedCrop(bitmap, row) ?: return null
+        val feature = Mat()
         return try {
-            synchronized(lock) {
-                model.alignCrop(bgr, points, aligned)
-                model.feature(aligned, feature)
-            }
+            synchronized(lock) { model.feature(aligned, feature) }
             val vector = FloatArray(feature.cols()); feature.get(0, 0, vector)
             val length = sqrt(vector.fold(0f) { acc, x -> acc + x * x })
             if (length <= 0f) null else FloatArray(vector.size) { vector[it] / length }
-        } finally { bgr.release(); points.release(); aligned.release(); feature.release() }
+        } finally { aligned.release(); feature.release() }
     }
+
+    /** The 112x112 BGR crop the model reads, from OpenCV's five-point alignment; the caller releases it. */
+    internal fun alignedCrop(bitmap: Bitmap, row: FloatArray): Mat? {
+        val rgba = Mat(); Utils.bitmapToMat(bitmap, rgba)
+        val bgr = Mat(); Imgproc.cvtColor(rgba, bgr, Imgproc.COLOR_RGBA2BGR); rgba.release()
+        val points = Mat(1, 15, CvType.CV_32F).also { it.put(0, 0, row); it.put(0, 14, floatArrayOf(1f)) }
+        val aligned = Mat()
+        try { synchronized(lock) { model.alignCrop(bgr, points, aligned) } } finally { bgr.release(); points.release() }
+        return aligned
+    }
+
+    /** The five-point row OpenCV expects for `face`, or null without landmarks. */
+    internal fun row(bitmap: Bitmap, face: FaceVision.Face, landmarks: List<android.graphics.PointF>): FloatArray? {
+        val p = when { landmarks.size >= 478 -> listOf(landmarks[468], landmarks[473], landmarks[1], landmarks[61], landmarks[291]); landmarks.size == 5 -> landmarks; else -> return null }
+        val w = bitmap.width.toFloat(); val h = bitmap.height.toFloat()
+        val box = face.box.pixels(bitmap)
+        val eyes = listOf(p[0], p[1]).sortedBy { it.x }
+        val mouth = listOf(p[3], p[4]).sortedBy { it.x }
+        return floatArrayOf(box.left, box.top, box.width(), box.height(), eyes[0].x * w, eyes[0].y * h, eyes[1].x * w, eyes[1].y * h,
+            p[2].x * w, p[2].y * h, mouth[0].x * w, mouth[0].y * h, mouth[1].x * w, mouth[1].y * h)
+    }
+
+    /** The raw (unnormalised) 128 floats OpenCV's engine gives for an aligned crop. */
+    internal fun rawFeature(aligned: Mat): FloatArray { val f = Mat(); synchronized(lock) { model.feature(aligned, f) }; return FloatArray(f.cols()).also { f.get(0, 0, it); f.release() } }
 }

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: the reader, scan, body, memory and face probes (ReaderProbeActivity.kt, ScanProbeActivity.kt, BodyProbeActivity.kt, MemProbeActivity.kt, FaceProbeActivity.kt), started from adb. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity android:name=".ReaderProbeActivity" android:exported="true" />
+        <activity android:name=".ScanProbeActivity" android:exported="true" />
+        <activity android:name=".BodyProbeActivity" android:exported="true" />
+        <activity android:name=".MemProbeActivity" android:exported="true" />
+        <activity android:name=".FaceProbeActivity" android:exported="true" />
+    </application>
+</manifest>

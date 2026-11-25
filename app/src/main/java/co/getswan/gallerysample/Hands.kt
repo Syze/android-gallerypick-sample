@@ -20,8 +20,9 @@ object Hands {
 
     private lateinit var appContext: Context
     fun init(context: Context) { appContext = context.applicationContext }
+    fun release() = landmarker.release()
 
-    private val landmarker: HandLandmarker? by lazy {
+    private val landmarker = Reloadable<HandLandmarker> {
         runCatching {
             HandLandmarker.createFromOptions(appContext, HandLandmarker.HandLandmarkerOptions.builder()
                 .setBaseOptions(BaseOptions.builder().setModelAssetPath(MODEL).build())
@@ -31,7 +32,7 @@ object Hands {
 
     /** `face` is the face box normalised to `bitmap`. The detector runs on a crop around the face. */
     fun read(bitmap: Bitmap, face: RectF): Read? {
-        val l = landmarker ?: return null
+        val l = landmarker.get() ?: return null
         val S = GallerySettings
         // The zone: the face box grown by 15%; the crop around it, wide enough to see a whole hand at its edge.
         val zone = RectF(face).also { it.inset(-face.width() * 0.15f, -face.height() * 0.15f) }

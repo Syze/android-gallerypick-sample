@@ -72,6 +72,12 @@ class BodyScore private constructor(
         /** On, the body is read with the torso at `fixedTorsoPixels` whatever the render size, so the mask and outline
          *  readings come out the same for the same photo (sharpness stays at the render). Off: read at the render. */
         const val fixedScaleEnabled = true; const val fixedTorsoPixels = 400.0
+        /** The largest the enlarged photo may be, in megapixels. Only a person tiny in the frame or a pose read with its
+         *  joints bunched reaches it; without it such a photo is blown up many times over (one read 49 MP on a phone). */
+        const val fixedScaleMaxMegapixels = 24.0
+        /** On, only the body area of the enlarged photo is copied out for reading: the mask crop with a margin for the
+         *  outline band, and the face for its skin colour. A few MB of Java memory instead of the whole photo. Off: all of it. */
+        const val fixedScaleBodyOnly = true
         /** Pixels sampled either side of the body's edge for the outline contrast: a band moves less than the edge itself. */
         const val outlineBand = 8
         const val minBodyPixels = 400.0
@@ -87,8 +93,9 @@ class BodyScore private constructor(
 
         private const val MODEL = "FaceModels/selfie_multiclass_256x256.tflite"
         private lateinit var appContext: Context
-        fun init(context: Context) { appContext = context.applicationContext }
-        private val segmenter: ImageSegmenter? by lazy {
+        fun init(context: Context) { appContext = context.applicationContext; FaceCover.init(context) }   // the shared segmenter lives there
+        fun release() = segmenter.release()
+        private val segmenter = Reloadable<ImageSegmenter> {
             runCatching {
                 ImageSegmenter.createFromOptions(appContext, ImageSegmenter.ImageSegmenterOptions.builder()
                     .setBaseOptions(BaseOptions.builder().setModelAssetPath(MODEL).build())
@@ -110,34 +117,50 @@ class BodyScore private constructor(
         /** `bitmap`: the render the pose was read on; `body`: the kept pose; `face`: the matched face box (normalised,
          *  top-left origin); `originalScale`: original pixels per render pixel; `objects`: from `BodyObjects`. */
         fun compute(render: Bitmap, body: BodyCheck, face: RectF?, originalScale: Double, caps: Caps? = null, objects: List<BodyObjects.Object> = emptyList(),
-                    debugName: String? = null): BodyScore? {
+                    debugName: String? = null, bodyOnly: Boolean = fixedScaleBodyOnly): BodyScore? {
             // Fixed scale: the torso brought to `fixedTorsoPixels` before anything is read — see the constant.
             var scaleToOriginal = originalScale
-            val bitmap = run {
+            val scale = run {
                 fun pt(i: Int) = if ((body.visibility.getOrNull(i) ?: 0f) >= 0.1f) body.landmarks.getOrNull(i) else null
                 val ls = pt(LS); val rs = pt(RS); val lh = pt(LH); val rh = pt(RH)
-                if (!fixedScaleEnabled || ls == null || rs == null || lh == null || rh == null) return@run render
+                if (!fixedScaleEnabled || ls == null || rs == null || lh == null || rh == null) return@run 1.0
                 val torso = hypot(((ls.x + rs.x) / 2 - (lh.x + rh.x) / 2) * render.width, ((ls.y + rs.y) / 2 - (lh.y + rh.y) / 2) * render.height).toDouble()
-                val s = if (torso > 1) fixedTorsoPixels / torso else 1.0
-                if (abs(s - 1) <= 0.02) return@run render
-                scaleToOriginal /= s
-                Bitmap.createScaledBitmap(render, max(1, (render.width * s).roundToInt()), max(1, (render.height * s).roundToInt()), true)
+                val fit = Math.sqrt(fixedScaleMaxMegapixels * 1_000_000 / (render.width.toDouble() * render.height))
+                val s = if (torso > 1) min(fit, fixedTorsoPixels / torso) else 1.0
+                if (abs(s - 1) <= 0.02) 1.0 else s
             }
-            val w = bitmap.width; val h = bitmap.height
-            val px = IntArray(w * h); bitmap.getPixels(px, 0, w, 0, 0, w, h)
-            fun lum(x: Int, y: Int): Float {
-                if (x < 0 || y < 0 || x >= w || y >= h) return 0f
-                val c = px[y * w + x]; return luma(((c shr 16) and 255).toFloat(), ((c shr 8) and 255).toFloat(), (c and 255).toFloat()) / 255
-            }
-            fun rgb(x: Int, y: Int): Triple<Float, Float, Float> { val c = px[y * w + x]; return Triple(((c shr 16) and 255) / 255f, ((c shr 8) and 255) / 255f, (c and 255) / 255f) }
-
-            // The person mask: the segmenter on a crop around the pose, so the 256 px model sees the body large.
-            val s = segmenter ?: return null
+            if (scale != 1.0) scaleToOriginal /= scale
+            // The enlarged photo's size; with `bodyOnly` only the part at (ox, oy) that the score reads is made.
+            val w = if (scale == 1.0) render.width else max(1, (render.width * scale).roundToInt())
+            val h = if (scale == 1.0) render.height else max(1, (render.height * scale).roundToInt())
             if (body.landmarks.isEmpty()) return null
             val xs = body.landmarks.map { it.x }; val ys = body.landmarks.map { it.y }
             val cropN = RectF((xs.min() - 0.1f).coerceIn(0f, 1f), (ys.min() - 0.1f).coerceIn(0f, 1f), (xs.max() + 0.1f).coerceIn(0f, 1f), (ys.max() + 0.1f).coerceIn(0f, 1f))
             val cx0 = (cropN.left * w).toInt(); val cy0 = (cropN.top * h).toInt()
             val cw = ((cropN.right * w).toInt() - cx0).coerceAtLeast(16); val ch = ((cropN.bottom * h).toInt() - cy0).coerceAtLeast(16)
+            val bitmap = if (scale == 1.0) render else Bitmap.createScaledBitmap(render, w, h, true)
+            // The part read, at (ox, oy): the whole photo, or with `bodyOnly` the mask crop, the outline band beyond it and the face square.
+            var ox = 0; var oy = 0; var bw = w; var bh = h
+            if (bodyOnly && scale != 1.0) {
+                val m = outlineBand + 2
+                var x0 = cx0 - m; var y0 = cy0 - m; var x1 = cx0 + min(cw, w - cx0) + m; var y1 = cy0 + min(ch, h - cy0) + m
+                face?.let { f -> val fx = (f.centerX() * w).toInt(); val fy = (f.centerY() * h).toInt(); val fr = max(1, (f.width() * w * 0.2f).toInt()) + 1
+                    x0 = min(x0, fx - fr); y0 = min(y0, fy - fr); x1 = max(x1, fx + fr + 1); y1 = max(y1, fy + fr + 1) }
+                ox = x0.coerceIn(0, w - 1); oy = y0.coerceIn(0, h - 1); bw = x1.coerceIn(ox + 1, w) - ox; bh = y1.coerceIn(oy + 1, h) - oy
+            }
+            val px = IntArray(bw * bh); bitmap.getPixels(px, 0, bw, ox, oy, bw, bh)
+            fun lum(x: Int, y: Int): Float {
+                if (x < 0 || y < 0 || x >= w || y >= h) return 0f
+                val ix = x - ox; val iy = y - oy; if (ix < 0 || iy < 0 || ix >= bw || iy >= bh) return 0f
+                val c = px[iy * bw + ix]; return luma(((c shr 16) and 255).toFloat(), ((c shr 8) and 255).toFloat(), (c and 255).toFloat()) / 255
+            }
+            fun rgb(x: Int, y: Int): Triple<Float, Float, Float> {
+                val ix = x - ox; val iy = y - oy; if (ix < 0 || iy < 0 || ix >= bw || iy >= bh) return Triple(0f, 0f, 0f)
+                val c = px[iy * bw + ix]; return Triple(((c shr 16) and 255) / 255f, ((c shr 8) and 255) / 255f, (c and 255) / 255f)
+            }
+
+            // The person mask: the segmenter on a crop around the pose, so the 256 px model sees the body large.
+            val s = (if (GallerySettings.shareSelfieSegmenter) FaceCover.shared() else segmenter.get()) ?: return null
             val crop = Bitmap.createBitmap(bitmap, cx0, cy0, min(cw, w - cx0), min(ch, h - cy0))
             val longest = max(crop.width, crop.height)
             val small = if (longest > 512) Bitmap.createScaledBitmap(crop, max(1, crop.width * 512 / longest), max(1, crop.height * 512 / longest), true) else crop
@@ -480,13 +503,13 @@ class BodyScore private constructor(
             val visibility = 0.4f * torso + 0.4f * legs + 0.2f * arms
             // Debug builds: the render with the mask tinted green, torso rows red, leg rows blue, joints yellow.
             if (GallerySettings.debugDumpMasks && debugName != null) runCatching {
-                val out = bitmap.copy(Bitmap.Config.ARGB_8888, true)
-                val px = IntArray(w * h); out.getPixels(px, 0, w, 0, 0, w, h)
+                val out = Bitmap.createBitmap(bitmap, ox, oy, bw, bh).copy(Bitmap.Config.ARGB_8888, true)
+                val px = IntArray(bw * bh); out.getPixels(px, 0, bw, 0, 0, bw, bh)
                 for (y in cy0 until cy0 + crop.height) for (x in cx0 until cx0 + crop.width) if (on(x, y)) {
-                    val c = px[y * w + x]; px[y * w + x] = Color.rgb((Color.red(c) * 0.6f).toInt(), min(255, (Color.green(c) * 0.6f + 100).toInt()), (Color.blue(c) * 0.6f).toInt())
+                    val i = (y - oy) * bw + (x - ox); val c = px[i]; px[i] = Color.rgb((Color.red(c) * 0.6f).toInt(), min(255, (Color.green(c) * 0.6f + 100).toInt()), (Color.blue(c) * 0.6f).toInt())
                 }
-                out.setPixels(px, 0, w, 0, 0, w, h)
-                val canvas = Canvas(out); val paint = Paint().apply { strokeWidth = max(2f, w / 500f) }
+                out.setPixels(px, 0, bw, 0, 0, bw, bh)
+                val canvas = Canvas(out).apply { translate(-ox.toFloat(), -oy.toFloat()) }; val paint = Paint().apply { strokeWidth = max(2f, w / 500f) }
                 paint.color = Color.RED; for (r in torsoRuns) canvas.drawLine(r.x.toFloat(), r.y.toFloat(), (r.x + r.width).toFloat(), r.y.toFloat(), paint)
                 paint.color = Color.BLUE; for (r in legRunsAll) canvas.drawLine(r.x.toFloat(), r.y.toFloat(), (r.x + r.width).toFloat(), r.y.toFloat(), paint)
                 paint.color = Color.YELLOW; for (j in listOfNotNull(lS, rS, lH, rH, lK, rK, lA, rA)) canvas.drawCircle(j.x, j.y, max(4f, w / 150f), paint)

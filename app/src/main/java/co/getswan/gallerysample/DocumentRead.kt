@@ -20,11 +20,13 @@ data class DocumentRead(val lines: Int, val nearFace: Int, val textArea: Float, 
 
     companion object {
         private const val TAG = "swan"
-        private val recognizer by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
+        private val recognizer = Reloadable { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
+        internal fun client() = recognizer.get()!!
+        fun release() = recognizer.release()
 
         /** Reads the render; `face` is the face box normalised 0-1. Null when recognition fails. */
         fun read(bitmap: Bitmap, face: RectF): DocumentRead? {
-            val text = runCatching { Tasks.await(recognizer.process(InputImage.fromBitmap(bitmap, 0))) }
+            val text = runCatching { Tasks.await(client().process(InputImage.fromBitmap(bitmap, 0))) }
                 .onFailure { Log.e(TAG, "text recognition failed: ${it.message}") }.getOrNull() ?: return null
             val w = bitmap.width.toFloat(); val h = bitmap.height.toFloat()
             // The zone around the face: the box scaled about its centre.

@@ -389,9 +389,34 @@ object GallerySettings {
         return if (cut < matchThreshold) cut else null
     }
 
-    /** Android only: photos decoded and detected ahead of the one being read, and the threads doing it. */
-    const val lookAheadPhotos = 4
-    const val lookAheadWorkers = 3
+    /** Android only: photos decoded and detected ahead of the one being read, and the threads doing it.
+     *  6 and 5 since 23 Nov 2026 (were 4 and 3): once the threads also load the scan render, the main loop waited on them. */
+    const val lookAheadPhotos = 6
+    const val lookAheadWorkers = 5
+    /** How many larger renders (up to 4096 px, 50–65 MB each) the read-ahead may hold at once; a photo past that
+     *  loads its larger render on the main loop. Same results. A cap of 2 was tried on 25 Nov 2026: the peak did not
+     *  move (834 vs 831 MB) and the scan took 15 s longer, so the cap equals `lookAheadPhotos` and never binds. */
+    const val lookAheadLargerMax = lookAheadPhotos
+    /** On, the readers of a matched photo that need only the render (text, labels, hands, expression) run at the same
+     *  time on `parallelReaderThreads` threads instead of one after another, as Vision batches them on iOS. Off: in turn. */
+    const val parallelReaders = true
+    const val parallelReaderThreads = 4
+    /** On, the read-ahead skips a stored face the store already decides (no match, or a stranger beside it), as the
+     *  main loop never uses that load. Off: every stored candidate is decoded and detected again. Results unchanged. */
+    const val lookAheadSkipsStoreDecided = true
+    /** On, the read-ahead also loads the 1536 render of a single clear face, and looks again for a small face on its
+     *  larger render, so the main loop does not wait for either. Off: the main loop does both. Results unchanged. */
+    const val lookAheadLoadsScanRender = true
+    /** How long a scan waits for ML Kit's text model (Play services, downloaded on first use) before it goes on
+     *  without it; the summary's `mlKitReady` says which. */
+    const val mlKitModelWaitMs = 60_000L
+    /** On, the readers only the scan uses (pose, body outline, hands, objects, labels, text, expression, face cover)
+     *  are closed when it ends, and again after each camera shot is read, and built again when next needed, so the
+     *  idle app holds far less memory. The face finders and the face match stay loaded. Off: every reader stays loaded. */
+    const val releaseModelsAfterScan = true
+    /** On, the body score and the face cover use one copy of the selfie segmenter (same model file, same options)
+     *  instead of loading it twice: about 80 MB less during a scan, the same masks. Off: two copies. */
+    const val shareSelfieSegmenter = true
 
     /** How often the page's progress bar is told, in ms. */
     const val progressIntervalMs = 250L

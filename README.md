@@ -23,10 +23,12 @@ same rules, file for file.
 2. Pick the build variant **`sandboxDebug`** (Build → Select Build Variant).
    `sandbox` is the default flavor and loads Swan's development environment and
    its dev page CDN, so the sample runs as it is. `production` loads the
-   production page and needs your own values.
+   production page and needs your own values. To time a scan, use
+   **`sandboxRelease`**: it is shrunk, has no debug extras and installs over
+   `sandboxDebug` (both are signed with the debug key).
 3. `app/src/main/java/co/getswan/gallerysample/SwanEnvironment.kt` holds what
    differs between the two flavors: the page URL, the session URL, the API key,
-   whether each scan's report is posted (sandbox only), and the shopper's
+   whether each scan's report is posted (both flavors, by default), and the shopper's
    `shopDomain`, gender, height and `monthsBack`. In a shipped app the session
    token comes from your own server and the key never ships; the sample mints
    it on the device to keep the setup short.
@@ -52,7 +54,7 @@ JAVA_HOME=/path/to/jdk-21 ./gradlew :app:assembleSandboxDebug
 | `MuseScore.kt`, `BodyScore.kt`, `BodyObjects.kt`, `FaceCover.kt` | Scores a matched photo for the Muse; the full-length body score; objects and face cover. |
 | `GalleryPhotos.kt`, `Original.kt` | Serves photos to the page: thumbnails, originals, EXIF camera data. |
 | `ScanStore.kt` | Keeps what the scan learned about each photo between scans, on the phone only. |
-| `ScanReport.kt` | Posts a JSON report of each scan in sandbox builds; off in production. |
+| `ScanReport.kt` | Posts a JSON report of each scan to Swan's scan ingest; `SwanEnvironment` turns it off. |
 | `Helpers.kt` | Small shared helpers. |
 | `app/src/main/assets/FaceModels/` | The models: SFace (ONNX), the MediaPipe face, pose and hand landmarkers, the selfie segmenter and the object detector. |
 | `docs/` | The integration guide (`GALLERY_PICK.md`), the Android notes and plan, the score sheet, the text keys and the changelog. |
@@ -62,7 +64,7 @@ JAVA_HOME=/path/to/jdk-21 ./gradlew :app:assembleSandboxDebug
 The port follows the iOS controller rule for rule; a change lands in Swift first
 and is then ported to the Kotlin file of the same name. On the shared test sets
 the picks match iOS in nearly every case. Open items, in `docs/GALLERY_PICK_ANDROID_PLAN.md`:
-the size and cost pass (the arm64 APK is about 170 MB with every model), and
+the size and cost pass (the arm64 release APK is about 128 MB with every model), and
 the remaining re-tuning of readings that come from different detectors than
 Apple's (label confidences, head-level tilt).
 

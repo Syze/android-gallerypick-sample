@@ -81,7 +81,10 @@ A region the joints cannot place scores 0.
 The mask and the outline are read with the body brought to a fixed scale
 (the torso at 400 px) and the outline contrast over an 8 px band either side
 of the edge, so the same photo reads the same whatever size it was rendered
-at. Sharpness is read at the render.
+at. The enlarged photo is never more than 24 megapixels
+(`fixedScaleMaxMegapixels`): only a person tiny in the frame, or a pose read
+with its joints bunched, reaches that, and is read at the largest scale that
+fits. Sharpness is read at the render.
 
 ### Step 2: what lowers a region
 

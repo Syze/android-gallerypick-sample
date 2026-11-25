@@ -15,7 +15,7 @@ are taken.
 
 | Piece | Today | On Android |
 |---|---|---|
-| The web page (`swan-mobile`, v1.3.18 live; the `[Unreleased]` work on `dev-mobilePackage` on top) | A WebView page; talks to the host by `window.postMessage` in and `swanBridge` out | **Reused as is.** `nativeBridge.ts` already finds `window.swanBridge` (the name `addJavascriptInterface` gives) before the WebKit handler |
+| The web page (`swan-mobile`, v1.3.19 live; the `[Unreleased]` work on `dev-mobilePackage` on top) | A WebView page; talks to the host by `window.postMessage` in and `swanBridge` out | **Reused as is.** `nativeBridge.ts` already finds `window.swanBridge` (the name `addJavascriptInterface` gives) before the WebKit handler |
 | Message contract (`GALLERY_PICK.md`) | `RENDER_COMPONENT`, `GALLERY_SCAN_START`, `onGalleryMatchFound`, `onGalleryScanComplete`, thumbnails, full image, callbacks | **Reused as is.** The Kotlin host answers the same messages with the same payloads |
 | Backend: register, upload, build, socket, images, profile | Called by the page, not the host | **Nothing to do** |
 | Swift controller (19 files, ~7,350 lines) | Scan, matching, scoring, photo serving, store, session, report | **Rewritten in Kotlin**, file for file, same rules |

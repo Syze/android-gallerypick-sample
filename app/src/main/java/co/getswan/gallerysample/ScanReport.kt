@@ -64,6 +64,7 @@ class ScanReport(private val url: String?, private val key: String?, private val
             .put("checks", checks)
             .put("trail", trail)
         for (k in listOf("error", "denied", "limited", "skipped", "summary")) if (payload.has(k)) report.put(k, payload.get(k))
+        Log.i(TAG, "scan report: ${photos.size} shown, ${dropped.size} dropped; posting in ${pickWaitMs / 1000} s")
         matches.clear(); droppedWhy = emptyMap(); checks = JSONObject(); trail = JSONArray(); picks.clear()
         main.postDelayed({
             val picked = picks.filter { ids.contains(it) }
@@ -97,9 +98,9 @@ class ScanReport(private val url: String?, private val key: String?, private val
         val json = report.toString().toByteArray()
         val packed = ByteArrayOutputStream().also { GZIPOutputStream(it).use { g -> g.write(json) } }.toByteArray()
         for (attempt in 1..attempts) {
-            // The product token names the platform and build, as iOS's "photoApp/<build>" does: the ingest lists it as `client`.
+            // The product token names the platform, build and environment, as iOS's "photoApp/ios/<build>/<env>" does: the ingest lists it as `client` and filters by it.
             val request = Request.Builder().url(url).post(packed.toRequestBody("application/json".toMediaType()))
-                .header("Content-Encoding", "gzip").header("User-Agent", "photoApp-android/${BuildConfig.VERSION_CODE}")
+                .header("Content-Encoding", "gzip").header("User-Agent", "photoApp/android/${BuildConfig.VERSION_CODE}/${SwanEnvironment.reportEnvironment}")
                 .also { b -> key?.let { b.header("x-api-key", it) } }.build()
             val result = runCatching { client.newCall(request).execute() }
             val response = result.getOrNull()

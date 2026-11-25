@@ -9,6 +9,13 @@ import kotlin.math.roundToInt
 /** Small helpers shared by the scan and the scores. Mirrors `Helpers.swift`. */
 
 /** The middle value; with an even count, the mean of the two middle values. */
+/** A model held like `lazy`, but one `release()` closes it so the next `get()` builds it again (`Models.release`). */
+class Reloadable<T : AutoCloseable>(private val build: () -> T?) {
+    private var held: T? = null; private var built = false
+    @Synchronized fun get(): T? { if (!built) { held = build(); built = true }; return held }
+    @Synchronized fun release() { runCatching { held?.close() }; held = null; built = false }
+}
+
 fun median(values: List<Float>): Float {
     val s = values.sorted()
     return if (s.size % 2 == 1) s[s.size / 2] else (s[s.size / 2 - 1] + s[s.size / 2]) / 2

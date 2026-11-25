@@ -60,7 +60,7 @@ object BodyPose {
     private lateinit var appContext: Context
     fun init(context: Context) { appContext = context.applicationContext }
 
-    private val landmarker: PoseLandmarker? by lazy {
+    private val landmarker = Reloadable<PoseLandmarker> {
         runCatching {
             PoseLandmarker.createFromOptions(appContext, PoseLandmarker.PoseLandmarkerOptions.builder()
                 .setBaseOptions(BaseOptions.builder().setModelAssetPath(MODEL).build())
@@ -70,13 +70,14 @@ object BodyPose {
         }.onFailure { Log.e(TAG, "Could not load the pose landmarker: ${it.message}") }.getOrNull()
     }
 
-    fun warmUp() { landmarker }
+    fun warmUp() { landmarker.get() }
+    fun release() = landmarker.release()
 
     /** The shopper's body: the pose whose head joints fall in the face box (grown by `bodyFaceMargin`),
      *  else the first pose when no face is given. `people` comes from the object detector. */
     fun check(bitmap: Bitmap, face: RectF?, people: Int): BodyCheck {
         val nobody = BodyCheck.unseen(people)
-        val l = landmarker ?: return nobody
+        val l = landmarker.get() ?: return nobody
         val result = runCatching { l.detect(BitmapImageBuilder(bitmap).build()) }.getOrNull() ?: return nobody
         val poses = result.landmarks(); if (poses.isEmpty()) return nobody
         fun vis(p: NormalizedLandmark) = p.visibility().orElse(1f)

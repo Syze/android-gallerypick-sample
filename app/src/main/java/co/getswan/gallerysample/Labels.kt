@@ -21,11 +21,12 @@ object Labels {
         "Gown" to "gown", "Sari" to "sari", "Dress" to "dress",
         "Passport" to "passport", "Receipt" to "receipt", "Paper" to "paper", "Screenshot" to "screenshot",
     )
-    private val labeler by lazy { ImageLabeling.getClient(ImageLabelerOptions.Builder().setConfidenceThreshold(0.1f).build()) }
+    private val labeler = Reloadable { ImageLabeling.getClient(ImageLabelerOptions.Builder().setConfidenceThreshold(0.1f).build()) }
+    fun release() = labeler.release()
 
     /** The known labels in `bitmap` with their confidence, strongest first. Empty when labelling fails. */
     fun read(bitmap: Bitmap): Map<String, Float> {
-        val found = runCatching { Tasks.await(labeler.process(InputImage.fromBitmap(bitmap, 0))) }
+        val found = runCatching { Tasks.await(labeler.get()!!.process(InputImage.fromBitmap(bitmap, 0))) }
             .onFailure { Log.e(TAG, "image labelling failed: ${it.message}") }.getOrNull() ?: return emptyMap()
         val out = LinkedHashMap<String, Float>()
         for (l in found.sortedByDescending { it.confidence }) map[l.text]?.let { name -> if (out[name] == null) out[name] = l.confidence }

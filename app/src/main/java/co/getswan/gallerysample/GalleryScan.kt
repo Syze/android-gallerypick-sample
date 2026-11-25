@@ -27,14 +27,19 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
     private val worker = Executors.newSingleThreadExecutor()
     /** Decodes and detects the next photos while the current one is read (iOS: `decodeAhead`). */
     private val decoder = Executors.newFixedThreadPool(GallerySettings.lookAheadWorkers)
-    private class Ahead(val small: Bitmap?, val faces: List<FaceVision.Face>, val larger: Bitmap? = null)
+    private class Ahead(val small: Bitmap?, val faces: List<FaceVision.Face>, val larger: Bitmap? = null,
+                        val largerFaces: List<FaceVision.Face>? = null, val scan: Bitmap? = null, val permit: Boolean = false)
     private val generation = AtomicInteger(0)
     private val recognizer: FaceRecognizer? by lazy { FaceRecognizer.load(context) }
     /** The last scan's reference face, for the identity check on camera shots. */
     @Volatile private var lastReference: FloatArray? = null
     /** Time spent per reader this scan, in ms, for the summary's `stageMs`. */
     private val stageMs = LinkedHashMap<String, Long>()
-    private inline fun <T> timed(stage: String, work: () -> T): T { val t = System.nanoTime(); try { return work() } finally { stageMs[stage] = (stageMs[stage] ?: 0L) + (System.nanoTime() - t) / 1_000_000 } }
+    private inline fun <T> timed(stage: String, work: () -> T): T { val t = System.nanoTime(); try { return work() } finally { synchronized(stageMs) { stageMs[stage] = (stageMs[stage] ?: 0L) + (System.nanoTime() - t) / 1_000_000 } } }
+    /** Readers of one matched photo that do not need each other run here at once (`parallelReaders`), as Vision batches them on iOS. */
+    private val readers = Executors.newFixedThreadPool(GallerySettings.parallelReaderThreads)
+    private fun <T> reader(work: () -> T): java.util.concurrent.Future<T> =
+        if (GallerySettings.parallelReaders) readers.submit(work) else java.util.concurrent.CompletableFuture.completedFuture(work())
 
     init { FaceVision.init(context); FaceCover.init(context); BodyPose.init(context); BodyObjects.init(context); BodyScore.init(context); Hands.init(context); GarmentClassifier.init(context) }
 
@@ -54,6 +59,10 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
             val S = GallerySettings
             val startedAt = System.currentTimeMillis()
             stageMs.clear()
+            // The highest resident memory seen, for the summary's `memoryPeakMB` (iOS's field).
+            var memoryPeak = residentMB()
+            // Without it the document rule would be off without a sign (`MlKitModels`).
+            val mlKitReady = timed("mlKitWait") { MlKitModels.await(context) }
             val recognizer = recognizer
             if (recognizer == null) { complete(run, JSONArray(), limited, error = "no-face-model"); return@execute }
 
@@ -97,16 +106,32 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
             // Most photos end at detection (no face, a group, a small face), so the first decode is the small
             // detection render; the scan render is decoded only for a face that passes the cheap gates.
             val ahead = HashMap<Int, java.util.concurrent.Future<Ahead>>()
-            fun needsLoad(a: GalleryPhotos.Asset) = store?.record(a)?.let { it.verdict == ScanStore.Verdict.candidate } ?: true
+            // At most `lookAheadLargerMax` larger renders held by the read-ahead at once; past that, the main loop loads its own.
+            val largerPermits = java.util.concurrent.Semaphore(S.lookAheadLargerMax)
+            fun needsLoad(a: GalleryPhotos.Asset): Boolean {
+                val r = store?.record(a) ?: return true
+                if (r.verdict != ScanStore.Verdict.candidate) return false
+                if (!S.lookAheadSkipsStoreDecided) return true
+                // The same tests as the store's `decided` below: only a stored match is loaded.
+                val ds = r.faces.map { FaceRecognizer.distance(referenceVector, it) }
+                val b = ds.minOrNull() ?: return true
+                return !(ds.size > 1 && ds.any { it >= S.matchThreshold }) && b < S.matchThreshold
+            }
             fun lookAhead(from: Int) { for (k in from until minOf(from + GallerySettings.lookAheadPhotos, assets.size)) if (ahead[k] == null && needsLoad(assets[k])) {
                 val a = assets[k]; ahead[k] = decoder.submit<Ahead> {
                     val b = load(a, S.detectPixels); val f = b?.let { FaceVision.detect(it) } ?: emptyList()
                     // A small face the original can clear: its larger render decodes here too, off the main loop.
                     val side = minOf(S.loadPixels, maxOf(a.width, a.height)).toFloat()
                     val scanW = if (a.width >= a.height) side else side * a.width / maxOf(a.height, 1)
-                    val big = f.firstOrNull()?.takeIf { it.width * scanW < S.minFacePixels && it.width * a.width >= S.minFacePixels }
-                        ?.let { load(a, minOf(S.fullResPixels, maxOf(S.loadPixels * 3 / 2, (S.minFacePixels / it.width * 1.25f).toInt()))) }
-                    Ahead(b, f, big) } } }
+                    val wantBig = f.firstOrNull()?.takeIf { it.width * scanW < S.minFacePixels && it.width * a.width >= S.minFacePixels }
+                    val permit = wantBig != null && largerPermits.tryAcquire()
+                    val big = if (permit) wantBig?.let { load(a, minOf(S.fullResPixels, maxOf(S.loadPixels * 3 / 2, (S.minFacePixels / it.width * 1.25f).toInt()))) } else null
+                    // `lookAheadLoadsScanRender`: the main loop's next steps done here on the same images, by its own tests below.
+                    val bigFaces = if (S.lookAheadLoadsScanRender) big?.let { FaceVision.detect(it) } else null
+                    val w0 = f.firstOrNull()?.width
+                    val scan = if (S.lookAheadLoadsScanRender && b != null && w0 != null && b.width < scanW && w0 * scanW >= S.minFacePixels &&
+                        f.count { it.width >= w0 * S.bystanderRatio } == 1) load(a) else null
+                    Ahead(b, f, big, bigFaces, scan, permit) } } }
             for ((i, asset) in assets.withIndex()) {
                 if (generation.get() != run) { ahead.values.forEach { it.cancel(true) }; return@execute }
                 lookAhead(i)
@@ -147,7 +172,9 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
                 } }
                 // Time spent waiting for the look-ahead threads: the pipeline's throughput, not a reader.
                 val ready = ahead.remove(i)?.let { f -> timed("waitAhead") { runCatching { f.get() }.getOrNull() } }
-                val small: Bitmap? = if (decided != null) { ready?.small?.recycle(); ready?.larger?.recycle(); null } else ready?.small ?: timed("decode") { load(asset, S.detectPixels) }
+                val small: Bitmap? = if (decided != null) { ready?.small?.recycle(); ready?.larger?.recycle(); ready?.scan?.recycle(); null } else ready?.small ?: timed("decode") { load(asset, S.detectPixels) }
+                // The scan render the read-ahead already loaded; freed below if the main loop does not use it.
+                var readyScan: Bitmap? = if (decided == null) ready?.scan else null
                 val readyFaces: List<FaceVision.Face>? = if (decided == null && ready?.small != null) ready.faces else null
                 // The 1536 render's longest side, so the face floor reads as it would on it.
                 val scanSide = minOf(S.loadPixels, maxOf(asset.width, asset.height)).toFloat()
@@ -169,7 +196,7 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
                         tally["faceRetried"] = tally["faceRetried"]!! + 1
                         largerNeeded = minOf(S.fullResPixels, maxOf(S.loadPixels * 3 / 2, (S.minFacePixels / all.first().width * 1.25f).toInt()))
                         largerRender(render)?.let { big ->
-                            val again = timed("detect") { FaceVision.detect(big) }
+                            val again = ready?.largerFaces?.takeIf { big === ready?.larger } ?: timed("detect") { FaceVision.detect(big) }
                             if (again.isNotEmpty() && again.first().width * big.width >= S.minFacePixels) { tally["faceRescued"] = tally["faceRescued"]!! + 1; render.recycle(); render = big; larger = null; all = again }
                         }
                     }
@@ -182,7 +209,7 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
                         if (S.debugFaceWidths) faceWidths = timed("debugWidths") { FaceVision.debugWidths(render, faces.first()) }
                         // Past the cheap gates: the scan render, unless the larger one is already in hand.
                         var smallCopy: Bitmap? = null
-                        if (render.width < scanWidth && faces.size == 1 && widestPx >= S.minFacePixels) timed("decode") { load(asset) }?.let { full -> smallCopy = render; render = full }
+                        if (render.width < scanWidth && faces.size == 1 && widestPx >= S.minFacePixels) (readyScan.also { readyScan = null } ?: timed("decode") { load(asset) })?.let { full -> smallCopy = render; render = full }
                         try {
                         if (S.requireSingleFace && faces.size > 1) { tally["group"] = tally["group"]!! + 1; outcome = "group of ${faces.size}"; store?.remember(asset, ScanStore.Verdict.group, note = "${faces.size} faces") }
                         else if (widestPx < S.minFacePixels) { tally["faceTooSmall"] = tally["faceTooSmall"]!! + 1; outcome = "face ${widestPx.toInt()}px, under ${S.minFacePixels.toInt()}"; store?.remember(asset, ScanStore.Verdict.faceTooSmall) }
@@ -209,12 +236,14 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
                             } else {
                                 // Pose after the face gates, as on iOS: the costliest reader runs only on a matched face.
                                 // The detector's input is 320 px, so the small copy serves it as well as the scan render.
+                                // The expression reader needs only the face, so it runs beside objects and pose.
+                                val headYawF = reader { timed("expression") { FaceVision.headYaw(render, faces.first()) } }
                                 val detected = timed("objects") { BodyObjects.read(smallCopy ?: render) }
                                 val body = timed("pose") { BodyPose.check(render, faces.first().box, BodyObjects.people(detected)) }
                                 val originalScale = maxOf(asset.width, asset.height).toFloat() / maxOf(render.width, render.height)
                                 val eyes = if (body.lowerJoints == 0) FaceVision.eyeSpacing(points.first(), render.width, render.height)?.let { it * originalScale } else null
                                 val faceRatio = faces.first().width * render.width / minOf(render.width, render.height)
-                                val headYaw = timed("expression") { FaceVision.headYaw(render, faces.first()) }
+                                val headYaw = headYawF.get()
                                 var bodyAgain: BodyCheck? = null; var bigRender: Bitmap? = null
                                 val kind = BodyPose.photoType(faceRatio, eyes, headYaw, body)
                                 val selfie = kind == BodyPose.PhotoType.SELFIE
@@ -236,12 +265,15 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
                                     if (!body.headSeen || body.lowerJoints < 1) store?.remember(asset, ScanStore.Verdict.notFullBody) else if (complete) store?.remember(asset, ScanStore.Verdict.candidate, vectors.map { it!! })
                                 }
                                 else {
-                                    val document = if (S.documentGateEnabled) timed("text") { DocumentRead.read(render, faces.first().box) } else null
-                                    val headLabels = timed("labels") { render.crop(headBox(faces.first().box))?.let { Labels.read(it) } ?: emptyMap() }
-                                    val wholeLabels = timed("labels") { Labels.read(render) }
+                                    // Text, the three label reads and the hands need only the render: they run at once, each on its own reader.
+                                    val documentF = reader { if (S.documentGateEnabled) timed("text") { DocumentRead.read(render, faces.first().box) } else null }
+                                    val headLabelsF = reader { timed("labels") { render.crop(headBox(faces.first().box))?.let { Labels.read(it) } ?: emptyMap() } }
+                                    val wholeLabelsF = reader { timed("labels") { Labels.read(render) } }
                                     // Suit and tuxedo are also read on the torso crop (`garmentReadOnTorso`), named `suit@torso` for their own cap line.
                                     val torsoCrop = if (!selfie && (S.garmentReadOnTorso || S.debugGarmentReads)) Labels.torsoCrop(render, faces.first().box) else null
-                                    val torsoLabels = torsoCrop?.let { timed("labels") { Labels.read(it) } } ?: emptyMap()
+                                    val torsoLabelsF = reader { torsoCrop?.let { timed("labels") { Labels.read(it) } } ?: emptyMap() }
+                                    val handsF = reader { if (selfie) timed("hands") { Hands.read(render, faces.first().box) } else null }
+                                    val document = documentF.get(); val headLabels = headLabelsF.get(); val wholeLabels = wholeLabelsF.get(); val torsoLabels = torsoLabelsF.get()
                                     val garments = wholeLabels.filter { (S.garmentCaps.any { r -> r.labels.contains(it.key) } || S.looseGarmentLabels.contains(it.key)) && it.value > 0.1f }.map { it.key to it.value } +
                                         (if (S.garmentReadOnTorso) torsoLabels.filter { S.torsoGarmentLabels.contains(it.key) && it.value > 0.1f }.map { "${it.key}@torso" to it.value } else emptyList())
                                     if (!selfie) garmentNote = garments.joinToString(" ") { "${it.first} ${"%.2f".format(it.second)}" }.ifEmpty { "none" }
@@ -255,7 +287,7 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
                                     val busy = Labels.torsoCrop(render, faces.first().box)?.let { Labels.busyness(it) } ?: 0f
                                     val outfit = MuseScore.Outfit(dressy, busy)
                                     // Hands over or near the face, selfies only, as the iOS gates read them.
-                                    val hands = if (selfie) timed("hands") { Hands.read(render, faces.first().box) } else null
+                                    val hands = handsF.get()
                                     val score = if (selfie) timed("selfieScore") { selfieScore(render, faces.first(), points.first(), widestPx, eyes, originalScale, asset, document, headLabels, outfit, hands) } else null
                                     val scoredBody = bodyAgain ?: body
                                     val scoredRender = bigRender ?: render
@@ -319,9 +351,10 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
                         }
                         } finally { smallCopy?.recycle() }
                     }
-                    render.recycle(); larger?.recycle()
+                    render.recycle(); larger?.recycle(); readyScan?.recycle()
                 }
                 // (the small copy, when kept, is freed with the render below)
+                if (ready?.permit == true) largerPermits.release()
                 store?.saveIfDue()
                 if (report != null || evalLabels != null) trail[asset.id] = JSONObject().put("id", asset.id).put("file", asset.file).put("taken", taken.format(Date(asset.takenAt)))
                     .put("outcome", outcome.substringBefore(" [").substringBefore(" head {").substringBefore(" photo {").take(160)).put("facePx", facePx.toInt()).put("ms", System.currentTimeMillis() - t0).putOpt("garments", garmentNote).putOpt("garmentReads", garmentReads).putOpt("faceWidths", faceWidths)
@@ -329,6 +362,7 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
                 val now = System.currentTimeMillis()
                 if (now - lastProgress >= S.progressIntervalMs || i == assets.lastIndex) {
                     lastProgress = now
+                    memoryPeak = maxOf(memoryPeak, residentMB())
                     sendToWeb(JSONObject().put("type", "onGalleryScanProgress").put("payload", JSONObject().put("done", i + 1).put("total", assets.size)))
                 }
             }
@@ -412,6 +446,8 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
             for (m in matches) if (!m.held && rescored.contains(m.id)) sendToWeb(JSONObject().put("type", "onGalleryMatchFound").put("payload", JSONObject(m.payload.toString()).put("rescored", true).put("done", assets.size).put("total", assets.size)))
             for (m in matches) if (m.held) sendToWeb(JSONObject().put("type", "onGalleryMatchFound").put("payload", JSONObject(m.payload.toString()).put("done", assets.size).put("total", assets.size)))
             ends["rescored"] = rescored.size
+            ends["memoryPeakMB"] = maxOf(memoryPeak, residentMB())
+            ends["mlKitReady"] = mlKitReady
             tally["ms"] = (System.currentTimeMillis() - startedAt).toInt()
             tally["screenshots"] = screenshots
             closestNoMatch?.let { ends["closestNoMatch"] = threePlaces(it) }
@@ -422,6 +458,12 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
             val summary = JSONObject(tally as Map<*, *>).put("unusableGates", JSONObject(unusableGates as Map<*, *>))
             for ((k, v) in ends) summary.put(k, v)
             summary.put("stageMs", JSONObject(stageMs as Map<*, *>))
+            // The same counts under iOS's names, which the ingest server's table reads; Android's own names stay.
+            val elapsed = tally["ms"] ?: 0
+            summary.put("total", assets.size).put("examined", assets.size).put("matched", tally["matches"]).put("elapsedMs", elapsed)
+                .put("monthsBack", months).put("photosPerSecond", (assets.size * 1000L / maxOf(1, elapsed)).toInt())
+            for ((type, key) in listOf("selfie" to "matchedSelfie", "front" to "matchedFront", "side" to "matchedSide", "three-quarter" to "matchedThreeQuarter"))
+                summary.put(key, matches.count { it.type == type })
             report?.endOfScan(droppedWhy, checks, JSONArray(trail.values.sortedByDescending { it.optString("taken") }))
             if (evalLabels != null) {
                 val text = DevTools.evalReport(evalLabels, trail.values, ordered.filter { trail[it]?.optString("outcome") != "withdrawn" })
@@ -527,7 +569,20 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
         }.let { if (it.config == Bitmap.Config.ARGB_8888) it else it.copy(Bitmap.Config.ARGB_8888, false) }
     }.getOrNull()
 
+    /** Resident memory in MB, as iOS's `residentMB`: /proc/self/statm's resident pages; 0 when unreadable. */
+    private fun residentMB(): Int = runCatching {
+        java.io.File("/proc/self/statm").readText().trim().split(" ")[1].toLong() * android.system.Os.sysconf(android.system.OsConstants._SC_PAGESIZE) / 1_048_576
+    }.getOrDefault(0L).toInt()
+
+    /** Closes the readers only the scan uses (`releaseModelsAfterScan`); each loads again on its next use. */
+    private fun releaseModels() {
+        if (!GallerySettings.releaseModelsAfterScan) return
+        BodyPose.release(); BodyScore.release(); Hands.release(); BodyObjects.release(); Labels.release(); DocumentRead.release()
+        FaceCover.release(); GarmentClassifier.release(); FaceVision.release()
+    }
+
     private fun complete(run: Int, assetIds: JSONArray, limited: Boolean, error: String? = null, summary: JSONObject? = null, dropped: List<String> = emptyList()) {
+        releaseModels()
         if (generation.get() != run) return
         val payload = JSONObject().put("assetIds", assetIds).put("limited", limited)
         error?.let { payload.put("error", it) }
@@ -549,7 +604,7 @@ class GalleryScan(private val context: Context, private val sendToWeb: (JSONObje
             if (id.isEmpty() || bytes == null) { sendToWeb(analysisError(id, "unreadable", captured = true)); return@execute }
             if (!GalleryPhotos.CaptureStore.store(id, bytes)) { sendToWeb(analysisError(id, "store-full", captured = true)); return@execute }
             val bitmap = decodeCapture(bytes) ?: run { sendToWeb(analysisError(id, "unreadable", captured = true)); return@execute }
-            val (analysis, gate) = try { analyseCapture(bitmap) } finally { bitmap.recycle() }
+            val (analysis, gate) = try { analyseCapture(bitmap) } finally { bitmap.recycle(); releaseModels() }
             // Stored first, so the tap that follows takes the same path as a scanned photo.
             GalleryPhotos.AnalysisStore.store(id, analysis)
             if (gate != null) {

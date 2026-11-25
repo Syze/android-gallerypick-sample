@@ -25,8 +25,9 @@ object BodyObjects {
 
     private lateinit var appContext: Context
     fun init(context: Context) { appContext = context.applicationContext }
+    fun release() = detector.release()
 
-    private val detector: ObjectDetector? by lazy {
+    private val detector = Reloadable<ObjectDetector> {
         runCatching {
             ObjectDetector.createFromOptions(appContext, ObjectDetector.ObjectDetectorOptions.builder()
                 .setBaseOptions(BaseOptions.builder().setModelAssetPath(MODEL).build())
@@ -40,7 +41,7 @@ object BodyObjects {
 
     /** Everything the detector finds, strongest first, boxes normalised to the image. */
     fun read(bitmap: Bitmap): List<Object> {
-        val d = detector ?: return emptyList()
+        val d = detector.get() ?: return emptyList()
         val result = runCatching { d.detect(BitmapImageBuilder(bitmap).build()) }.getOrNull() ?: return emptyList()
         val w = bitmap.width.toFloat(); val h = bitmap.height.toFloat()
         return result.detections().mapNotNull { det ->

@@ -12,10 +12,11 @@ to both platforms.
 step 7 re-tuning: sign-in, the page, the camera flow, the upload and the build;
 the photo permission, the library window, thumbnails, originals and captures
 are served; the per-photo scan store makes a second scan a fraction of the
-first; sandbox builds post the scan report to Swan's ingest with
+first; both flavors post the scan report to Swan's ingest with
 `platform: "android"` (iOS sends `platform: "ios"`) and the User-Agent
-`photoApp-android/<build>`, which the ingest lists as `client`, and the signed-in
-email as `account`, which the ingest lists scans by (`GET /v1/scans?account=<email>`). Faces are matched against
+`photoApp/android/<build>/<env>` (iOS: `photoApp/ios/<build>/<env>`; `sandbox` or
+`production`), which the ingest lists as `client` and `env` and filters by, and the signed-in email as `account`, which the
+ingest lists scans by (`GET /v1/scans?account=<email>`, or `?q=<part of it>`). Faces are matched against
 the selfie with the same SFace model and 0.60 cut-off as iOS (ML Kit finds the
 faces, MediaPipe reads each one; ML Kit's model comes from Play services). Bodies are read with the pose landmarker and the same person-mask readings as
 iOS, so a front, three-quarter or side arrives with its body score, tier and
@@ -180,13 +181,56 @@ data URIs and never use the scheme.
 
 ## Cost
 
-On the first test library (516 photos, arm64 phone) a full scan takes about
-100 s and a repeat scan 20–40 s, since the scan store settles photos it has
-already judged. The APK is about 140 MB: the models (SFace int8 9 MB, the face,
-pose, hand and segmentation models 37 MB, OpenCV 24 MB, MediaPipe 15 MB, the
-ML Kit text and label models) travel inside it. A shipping app can move the
-model files to Play Feature Delivery so the install stays small and the models
-download once.
+Time a scan in the `sandboxRelease` build. Debug builds also run readings that
+only feed the report (face widths, extra garment reads, a mask picture per scored
+body), and Android runs debuggable code slower, so a debug scan takes about 30%
+longer. `sandboxRelease` is signed with the debug key, so it installs over
+`sandboxDebug` and keeps its scan store. Running from Android Studio installs
+`sandboxDebug` again; install the release build from the terminal to time it.
+
+On a Galaxy S21 FE (692 photos, about 40 matches) `sandboxRelease` takes about
+130 s for a first scan and 65 s for a repeat scan; on a matched photo the
+readers that need only the render run at the same time (`parallelReaders`). On a repeat scan the store
+settles every photo it has already judged without loading it; only the matches
+are scored again.
+
+Memory: the readers hold about 360 MB once loaded (the two MediaPipe
+segmentation users share one copy of the selfie segmenter), the rest of a
+scan's peak is photos in flight; a scan peaks at about 830 MB and the report's
+`memoryPeakMB` records it. When the scan ends, and after each camera shot, the
+readers only the scan uses are closed (`releaseModelsAfterScan`), so the idle
+app holds about 120–160 MB; the face finders and the face match stay loaded for
+the camera's same-person check. Debug builds have a memory probe
+(`MemProbeActivity`) that logs what each reader adds.
+
+Release builds are shrunk with R8 (`isMinifyEnabled`, `isShrinkResources`).
+`app/proguard-rules.pro` keeps what the libraries look up by name: MediaPipe,
+its protobufs and its Flogger logging, OpenCV, and the page's
+`WebBridge.postMessage`. Without the Flogger rule every MediaPipe task fails to
+start and the selfie is refused with `no-face-in-selfie`.
+
+The arm64 release APK is about 110 MB:
+- native code, 48 MB: OpenCV 19 MB, MediaPipe 16 MB, ML Kit's label pipeline 11 MB
+- the models, 52 MB: selfie segmenter 16 MB, SFace int8 10 MB, pose 9 MB, hands 8 MB, objects 5 MB, face landmarker 4 MB
+- ML Kit's label model, 3 MB
+- the app's code, 6 MB
+
+OpenCV is a slim build of the official 4.14.0 package: only the modules the face
+match uses (core, imgproc, dnn, objdetect, the Java bindings), with the same
+compiler, flags and HALs, so the SFace vectors are identical to the official
+library's (checked bit for bit with the debug face probe). It lives in
+`app/src/main/jniLibs` beside the official package's Java classes
+(`app/libs/opencv-4.14.0-classes.jar`); `app/libs/opencv-build/README.md` says
+how to rebuild it for an upgrade.
+
+ML Kit's text model comes from Google Play services and downloads on first
+use; `MlKitModels.kt` asks for it when the gallery opens and the scan waits up
+to `mlKitModelWaitMs` for it (`mlKitReady` in the summary). Labels stay
+bundled: the Play services label model reads differently and would move the
+glasses, hat and scarf rules. The garment classifier model (5 MB) ships in
+debug builds only (`app/src/debug/assets`). A shipping app can move the model
+files to Play Feature Delivery or its own CDN so the install stays small and
+the models download once; that is the only route under about 100 MB.
 
 ## Debugging
 
